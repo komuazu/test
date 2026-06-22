@@ -12,9 +12,20 @@
 ### 2. 設定を書き換える（ファイル冒頭の「設定」部分）
 | 変数 | 内容 | 例 |
 | --- | --- | --- |
-| `SEARCH_QUERY` | 対象メールの検索条件 | `'label:請求書 has:attachment'` |
+| `SEARCH_QUERY` | 対象メールの検索条件 | `'in:inbox subject:(見積 OR お見積り) filename:pdf'` |
 | `DEST_FOLDER_ID` | 保存先フォルダーの ID | URL の `folders/` の後ろの文字列 |
 | `PROCESSED_LABEL` | 処理済みの目印ラベル名 | `'Drive保存済み'` |
+| `PDF_ONLY` | PDF だけ保存（他の添付は無視） | `true` |
+
+### 戻ってきた見積 PDF を保存する設定例
+お見積り依頼の返信で届く PDF を狙う場合の `SEARCH_QUERY`:
+
+- 件名で絞る: `'in:inbox subject:(見積 OR お見積り) filename:pdf'`
+- 差出人で絞る: `'in:inbox from:(torihiki@example.com) filename:pdf'`
+- ラベルで絞る（Gmail フィルタで自動ラベルを付けておくと確実）: `'label:見積回答 filename:pdf'`
+
+`in:inbox` で自分が送った依頼メールを除外し、`filename:pdf` で PDF 付きだけに絞ります。
+`PDF_ONLY = true` なら、メールに他の添付があっても PDF だけを保存します。
 
 **フォルダー ID の調べ方**: ドライブで保存先フォルダーを開き、URL
 `https://drive.google.com/drive/folders/`**`1AbCdEf...`** の太字部分をコピー。

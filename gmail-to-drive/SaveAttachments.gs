@@ -12,10 +12,12 @@
 // ===== 設定（ここだけ書き換えてください） ============================
 
 // 対象メールの Gmail 検索条件。
-//   ・ラベルで絞る場合:  'label:請求書 has:attachment'
-//   ・件名で絞る場合:    'subject:(請求書) has:attachment'
-//   ・両方:              'label:請求書 subject:(請求書) has:attachment'
-var SEARCH_QUERY = 'label:請求書 has:attachment';
+//   ・戻ってきた見積PDF:  'in:inbox subject:(見積 OR お見積り) filename:pdf'
+//   ・ラベルで絞る場合:    'label:見積回答 filename:pdf'
+//   ・差出人で絞る場合:    'in:inbox from:(torihiki@example.com) filename:pdf'
+// in:inbox … 自分が送ったものを除き、受信したメールだけを対象にする
+// filename:pdf … PDF が付いているメールだけを対象にする
+var SEARCH_QUERY = 'in:inbox subject:(見積 OR お見積り) filename:pdf';
 
 // 保存先の既存ドライブフォルダーの ID。
 // フォルダーを開いた時の URL  https://drive.google.com/drive/folders/XXXXXXXX の
@@ -30,6 +32,9 @@ var SKIP_IF_EXISTS = true;
 
 // 受信日のサブフォルダー（例 2026-06）を作って整理するか
 var ORGANIZE_BY_MONTH = false;
+
+// PDF だけを保存するか（true にすると PDF 以外の添付は無視）
+var PDF_ONLY = true;
 
 // ====================================================================
 
@@ -55,6 +60,11 @@ function saveGmailAttachmentsToDrive() {
       });
 
       attachments.forEach(function (attachment) {
+        // PDF だけを対象にする設定なら、それ以外はスキップ
+        if (PDF_ONLY && !isPdf_(attachment)) {
+          return;
+        }
+
         var folder = ORGANIZE_BY_MONTH
           ? getOrCreateSubFolder_(rootFolder, formatMonth_(message.getDate()))
           : rootFolder;
@@ -102,6 +112,13 @@ function createTrigger() {
 
 function getOrCreateLabel_(name) {
   return GmailApp.getUserLabelByName(name) || GmailApp.createLabel(name);
+}
+
+// 添付が PDF かどうかを MIME タイプまたは拡張子で判定
+function isPdf_(attachment) {
+  var type = attachment.getContentType() || '';
+  var name = (attachment.getName() || '').toLowerCase();
+  return type.indexOf('pdf') !== -1 || name.slice(-4) === '.pdf';
 }
 
 function getOrCreateSubFolder_(parent, name) {
