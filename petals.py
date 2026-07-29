@@ -10,17 +10,42 @@ import math
 import os
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageFilter
 
 
-def petal_sprite(size, color, alpha):
-    """Draw a single soft cherry-blossom petal on an RGBA tile."""
-    s = size
-    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    pad = max(1, s // 8)
-    # Elongated soft blossom: a rounded petal a little taller than it is wide.
-    d.ellipse([pad, pad // 2, s - pad, s - pad // 2], fill=color + (alpha,))
+def petal_sprite(size, color, alpha, blur):
+    """Draw one cherry-blossom petal: narrow at the base, notched at the tip.
+
+    `blur` softens the sprite so distant petals sit back and the nearest ones
+    read as out-of-focus foreground bokeh.
+    """
+    h = max(8, int(size))
+    w = max(6, int(size * 0.72))          # petals are taller than they are wide
+    # Normalized petal space: u across (-1..1), t along (0 = base, 1 = tip).
+    row, col = np.mgrid[0:h, 0:w]
+    u = (col / (w - 1)) * 2 - 1
+    t = 1 - row / (h - 1)                 # image rows run downward
+
+    # Half-width profile: pinched to a point at the base, broad at the tip.
+    half = np.power(np.clip(t, 0, 1), 0.60) * \
+        np.power(np.clip(1 - t ** 12, 0, 1), 0.22)
+    half = half / max(half.max(), 1e-6)
+
+    # The tip dips inward in the middle — the notch that reads as "sakura".
+    # Keep it shallow; a deep notch turns the petal into a heart.
+    tip = 1 - 0.07 * np.exp(-((u / 0.32) ** 2))
+
+    inside = (np.abs(u) <= half) & (t <= tip)
+    # Soften the rim so the edge is not aliased before the blur.
+    edge = np.clip((half - np.abs(u)) * w * 0.5, 0, 1)
+    a = (inside * edge * alpha).astype(np.uint8)
+
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[..., 0], rgba[..., 1], rgba[..., 2] = color
+    rgba[..., 3] = a
+    img = Image.fromarray(rgba, "RGBA")
+    if blur > 0:
+        img = img.filter(ImageFilter.GaussianBlur(blur))
     return img
 
 
@@ -41,27 +66,30 @@ def main():
     frames = int(round(T * FPS))
     margin = 120  # vertical wrap margin so petals enter/exit smoothly
 
-    # Two soft pink tones for depth.
-    tones = [(0xF7, 0xC5, 0xD6), (0xF3, 0xD9, 0xE4), (0xEC, 0xA9, 0xC4)]
+    # Soft pink tones, warm to cool, for a little color variety.
+    tones = [(0xF7, 0xC5, 0xD6), (0xF6, 0xE0, 0xE7), (0xEC, 0xA9, 0xC4),
+             (0xFA, 0xD8, 0xC8)]
 
     petals = []
     for _ in range(args.count):
-        depth = rng.uniform(0.35, 1.0)               # far -> near
-        size = int(18 + depth * 46)                  # px
-        base_alpha = int(70 + depth * 150)
+        depth = rng.uniform(0.0, 1.0)                # 0 = far, 1 = near
+        size = int(14 + depth * depth * 78)          # near petals much larger
+        # Distant petals are faint; the very nearest go soft and translucent
+        # so they read as foreground bokeh rather than stickers.
+        base_alpha = int(55 + 120 * depth - 55 * max(0.0, depth - 0.75) / 0.25)
+        blur = 0.4 + 3.6 * max(0.0, depth - 0.72) / 0.28 + (1 - depth) * 0.8
         color = tones[rng.integers(0, len(tones))]
         petals.append(
             dict(
-                x0=rng.uniform(-40, W + 40),
+                x0=rng.uniform(-60, W + 60),
                 phase=rng.uniform(0, 1),             # vertical phase (loop)
-                fall=rng.uniform(0.8, 1.6),          # loops per T (fall speed)
-                sway_amp=rng.uniform(18, 60) * depth,
+                fall=rng.uniform(0.45, 1.25) * (0.5 + depth),
+                sway_amp=rng.uniform(20, 70) * (0.4 + depth),
                 sway_freq=rng.integers(1, 4),        # integer -> periodic
                 sway_phase=rng.uniform(0, 2 * math.pi),
                 spin=rng.integers(-2, 3),            # integer turns per T
                 spin_phase=rng.uniform(0, 360),
-                sprite=petal_sprite(size, color, base_alpha),
-                size=size,
+                sprite=petal_sprite(size, color, base_alpha, blur),
             )
         )
 

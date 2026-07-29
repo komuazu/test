@@ -26,7 +26,9 @@ FONT = "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf"
 # Cuts land on the song's sections: quiet intro, build, chorus 1, verse 2,
 # chorus 2, turn, final chorus, outro.
 SCENES = [
-    ("img01_a224b8434f19.webp", 33, "push",  "dissolve"),   # 0:00 quiet intro
+    # Scenes 1 and 2 share a composition, so they bloom through white rather
+    # than dissolving — a straight dissolve reads as a double exposure.
+    ("img01_a224b8434f19.webp", 33, "push",  "fadewhite"),  # 0:00 quiet intro
     ("img08_c135c593635d.webp", 17, "up",    "fade"),       # 0:33 build
     ("img02_84067a3bff92.webp", 20, "pull",  "dissolve"),   # 0:50 chorus 1
     ("img06_5410be68cd3a.webp", 33, "panL",  "fade"),       # 1:10 verse 2
