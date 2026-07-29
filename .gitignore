@@ -3,4 +3,8 @@
 *.mov
 placeholder.jpg
 frame_check.png
+contact.png
 __pycache__/
+
+# Source photos stay local — they are personal images, not repo content.
+photos/
