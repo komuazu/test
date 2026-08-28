@@ -49,6 +49,19 @@ DEFAULT_CONFIG = {
 }
 
 
+_QUOTES = '"' + "'" + '“”「」'      # 貼り付けで付いてくる引用符
+
+
+def clean_src(s):
+    r"""フォルダのパスの前後の空白と引用符を落とす
+
+    エクスプローラーの「パスのコピー」は "C:\..." と引用符付きで入るため、
+    そのまま設定に入れると実在するフォルダでも見つからなくなる。
+    build.clean_src と同じ処理（xlrd 無しでも起動できるよう別に持つ）。
+    """
+    return str(s).strip().strip(_QUOTES)
+
+
 def load_config():
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG.exists():
@@ -60,6 +73,10 @@ def load_config():
 
 
 def save_config(cfg):
+    """設定を config.json に書く（フォルダのパスは引用符を落として揃える）"""
+    src = cfg.get('src')
+    if isinstance(src, list):
+        cfg['src'] = [x for x in (clean_src(c) for c in src if c) if x]
     CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
@@ -87,7 +104,8 @@ def src_candidates(cfg):
     """稼動日報フォルダの一覧（実在するものだけが実際に読まれる）"""
     src = cfg.get('src')
     lst = list(src) if isinstance(src, list) else ([src] if src else [])
-    return lst + list(cfg.get('srcAlt') or [])      # 旧い config.json との互換
+    lst += list(cfg.get('srcAlt') or [])            # 旧い config.json との互換
+    return [x for x in (clean_src(c) for c in lst if c) if x]
 
 
 def print_sources(cands):

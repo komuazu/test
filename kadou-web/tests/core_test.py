@@ -16,6 +16,7 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 
 import build                                                     # noqa: E402
+import server                                                    # noqa: E402
 from kadou_core import consolidate, extract_all, sort_groups     # noqa: E402
 from make_fixture import main as make_sample, make_multi         # noqa: E402
 
@@ -46,6 +47,14 @@ def main():
         check(build.resolve_src([str(tmp / 'ありません')])[0] == [],
               '本当に無いフォルダは見つけない')
 
+        # ── 引用符付きで貼られたパス（エクスプローラーの「パスのコピー」） ──
+        quoted = '"' + str(wave) + '"'
+        check([str(x) for x in build.resolve_src([quoted])[0]] == [str(wave)],
+              '前後に " が付いたパスでもフォルダを見つけられる')
+        check(build.clean_src('  ' + quoted + '  ') == str(wave),
+              'パスの前後の空白と引用符を落とす')
+        check(server.clean_src(quoted) == build.clean_src(quoted),
+              'server.py も build.py と同じようにパスを整える')
         # ── 同じファイルを二重に数えない ──
         dup = tmp / 'dup'
         shutil.copytree(sample, dup)

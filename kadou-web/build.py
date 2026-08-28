@@ -48,6 +48,18 @@ def fold_name(s):
     return t.replace(' ', '').replace('　', '').lower()
 
 
+_QUOTES = '"' + "'" + '“”「」'      # 貼り付けで付いてくる引用符
+
+
+def clean_src(s):
+    r"""指定されたフォルダのパスを整える（前後の空白と引用符を落とす）
+
+    エクスプローラーの「パスのコピー」は "C:\..." のように引用符付きで入る。
+    そのまま設定に入れると実在するフォルダでも見つからなくなるため、剥がしておく。
+    """
+    return str(s).strip().strip(_QUOTES)
+
+
 def resolve_src(src):
     """稼動日報フォルダの一覧から、実在するものを全部返す。
 
@@ -61,7 +73,7 @@ def resolve_src(src):
     戻り値: ([実在したフォルダ, ...], [指定された全候補, ...])
     """
     cands = [src] if isinstance(src, str) else list(src)
-    cands = [c for c in cands if c]
+    cands = [x for x in (clean_src(c) for c in cands if c) if x]
     found, seen = [], set()
     for c in cands:
         p = Path(c)
@@ -327,7 +339,7 @@ def main():
     a = p.parse_args()
 
     print('対象フォルダ:')
-    for c in a.src:
+    for c in (clean_src(x) for x in a.src):
         p_ = Path(c)
         if p_.is_dir():
             print('    %s' % c)
