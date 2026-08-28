@@ -1,0 +1,7 @@
+# 各PCごとの設定・入力内容・生成データ（共有しない）
+config.json
+memo.json
+memo.json.tmp
+web/data.json
+__pycache__/
+*.pyc

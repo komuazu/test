@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>稼動日報 印刷実績ビューア</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f3864'/%3E%3Crect x='7' y='8' width='18' height='4' fill='%23ffd24d'/%3E%3Crect x='7' y='15' width='18' height='3' fill='%23ffffff'/%3E%3Crect x='7' y='21' width='12' height='3' fill='%23ffffff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1 id="ttl">稼動日報 印刷実績ビューア</h1>
+  <span class="meta" id="meta"></span>
+  <span class="spacer"></span>
+  <span class="saved" id="saved">保存しました</span>
+  <button id="btnRebuild" title="稼動日報フォルダを読み直します">データ更新</button>
+  <button id="btnSetting" title="フォルダと対象年の設定">設定</button>
+</header>
+
+<nav class="tabs">
+  <button data-view="year" class="on">年間サマリー</button>
+  <button data-view="month">月別明細</button>
+  <button data-view="client">得意先別</button>
+  <button data-view="src">元ファイル</button>
+</nav>
+
+<main>
+  <div id="warns"></div>
+
+  <!-- ── 年間サマリー ── -->
+  <section class="view on" id="v-year">
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card">
+      <h2>月別 通し数 <small>営業部の積み上げ</small></h2>
+      <div class="bars" id="chart"></div>
+      <div class="legend">
+        <span><i class="hq"></i>本社営業部</span>
+        <span><i class="tk"></i>東京営業部</span>
+        <span><i class="ik"></i>池袋営業部</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>月別 × 営業部別 <small>上段=通し数／下段=件数（管理番号ベース）</small></h2>
+      <div class="toolbar">
+        <button class="btn" id="btnCsvYear">この表をCSVで保存</button>
+      </div>
+      <div class="scroll"><table id="matrix"></table></div>
+      <p class="note">数字をクリックすると、その月・その営業部の明細に移動します。</p>
+    </div>
+  </section>
+
+  <!-- ── 月別明細 ── -->
+  <section class="view" id="v-month">
+    <div class="toolbar">
+      <select id="selMonth"></select>
+      <span class="pills" id="pillDept"></span>
+      <input type="search" id="q" placeholder="管理番号・得意先・品名で絞り込み">
+      <span class="grow"></span>
+      <button class="btn" id="btnCsvMonth">CSVで保存</button>
+      <button class="btn" id="btnPrint">印刷</button>
+    </div>
+    <div class="card">
+      <h2 id="mTitle"></h2>
+      <div class="scroll"><table id="detail"></table></div>
+      <p class="note">
+        管理番号ごとに統合（枝番も統合）／通し数=合計／色数=「表/裏」（表版数・裏版数の最大値）／
+        印刷日=初日（複数日にまたがる行は日付が黄色）。
+        並び順: ①営業担当ｺｰﾄﾞ降順 ②得意先名降順（空欄は末尾） ③印刷日降順。
+        <b>山吹色の3列はこの画面用の記入欄です。入力内容は memo.json に保存され、元のExcelは変更されません。</b>
+      </p>
+    </div>
+  </section>
+
+  <!-- ── 得意先別 ── -->
+  <section class="view" id="v-client">
+    <div class="toolbar">
+      <span class="pills" id="pillDeptC"></span>
+      <input type="search" id="qc" placeholder="得意先名で絞り込み">
+      <span class="grow"></span>
+      <button class="btn" id="btnCsvClient">CSVで保存</button>
+    </div>
+    <div class="card">
+      <h2 id="cTitle"></h2>
+      <div class="scroll"><table id="clients"></table></div>
+    </div>
+  </section>
+
+  <!-- ── 元ファイル ── -->
+  <section class="view" id="v-src">
+    <div class="card">
+      <h2>読み込んだ稼動日報</h2>
+      <div class="scroll"><table id="files"></table></div>
+      <p class="note" id="srcPath"></p>
+    </div>
+    <div class="card">
+      <h2>検証 <small>統合の前後で通し数が変わっていないことの確認</small></h2>
+      <div class="scroll"><table id="stats"></table></div>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <div class="dh">設定</div>
+  <div class="db">
+    <label>稼動日報フォルダ（★新・26年稼動 のパス）</label>
+    <input id="inSrc" type="text" spellcheck="false">
+    <label>対象年</label>
+    <input id="inYear" type="number" min="2000" max="2100">
+    <p class="note">「保存して読み直す」を押すと、このフォルダの .xls を読み直します。
+      読み込みは一時フォルダへコピーしてから行うため、元のExcelファイルには一切触れません。</p>
+  </div>
+  <div class="df">
+    <button id="dlgCancel">キャンセル</button>
+    <button id="dlgOk" class="pri">保存して読み直す</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
