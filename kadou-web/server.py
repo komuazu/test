@@ -90,6 +90,26 @@ def src_candidates(cfg):
     return lst + list(cfg.get('srcAlt') or [])      # 旧い config.json との互換
 
 
+def print_sources(cands):
+    """どのフォルダを読むかを表示する
+
+    名前の表記ゆれ（全角チルダ「～」と波ダッシュ「〜」など）を吸収して
+    別名で見つかった場合は、実際に読むフォルダ名も出す。
+    """
+    sys.path.insert(0, str(HERE))
+    import build                                                 # noqa: PLC0415
+    for c in cands:
+        p = Path(c)
+        if p.is_dir():
+            print('    %s' % c)
+            continue
+        hit = build.match_by_name(p)
+        if hit is not None:
+            print('    %s\n      → %s として読み込みます' % (c, hit))
+        else:
+            print('    %s  （見つかりません）' % c)
+
+
 def rebuild(cfg):
     """稼動日報フォルダを読み直して web/ のデータを作り直す
 
@@ -197,8 +217,7 @@ def main():
 
     if not a.no_build:
         print('稼動日報を読み込んでいます …')
-        for c in src_candidates(cfg):
-            print('    %s%s' % (c, '' if Path(c).is_dir() else '  （見つかりません）'))
+        print_sources(src_candidates(cfg))
         try:
             rebuild(cfg)
             print('読み込み完了\n')

@@ -24,6 +24,7 @@ import datetime
 import json
 import sys
 import traceback
+import unicodedata
 from collections import OrderedDict
 from pathlib import Path
 
@@ -34,6 +35,19 @@ HERE = Path(__file__).resolve().parent
 WEB = HERE / 'web'
 
 
+def fold_name(s):
+    """フォルダ名の表記ゆれを吸収するキー
+
+    「13年稼動～25年稼動」の「～」は、全角チルダ(U+FF5E)と波ダッシュ(U+301C)の
+    2種類が混在しやすく、見た目が同じでも別の文字として扱われる。
+    全角半角・空白の違いも含めて同一視する。
+    """
+    t = unicodedata.normalize('NFKC', str(s))
+    for ch in '〜～~⁓∼':
+        t = t.replace(ch, '~')
+    return t.replace(' ', '').replace('　', '').lower()
+
+
 def resolve_src(src):
     """稼動日報フォルダの一覧から、実在するものを全部返す。
 
@@ -42,12 +56,39 @@ def resolve_src(src):
       ・同じフォルダへの別の行き方（U: と UNC）→ 片方しか存在しないので自然に片方だけ使う
     どちらの場合も、同じファイルを二重に数えないよう後段で重複を除く。
 
+    そのままの名前で見つからないときは、親フォルダの中を表記ゆれを吸収して探し直す。
+
     戻り値: ([実在したフォルダ, ...], [指定された全候補, ...])
     """
     cands = [src] if isinstance(src, str) else list(src)
     cands = [c for c in cands if c]
-    found = [Path(c) for c in cands if Path(c).is_dir()]
+    found, seen = [], set()
+    for c in cands:
+        p = Path(c)
+        if not p.is_dir():
+            p = match_by_name(p)
+            if p is None:
+                continue
+        key = str(p)
+        if key not in seen:
+            seen.add(key)
+            found.append(p)
     return found, cands
+
+
+def match_by_name(p):
+    """親フォルダの中から、表記ゆれを無視して同じ名前のフォルダを探す"""
+    parent = p.parent
+    if not parent.is_dir():
+        return None
+    want = fold_name(p.name)
+    try:
+        for d in sorted(parent.iterdir()):
+            if d.is_dir() and fold_name(d.name) == want:
+                return d
+    except OSError:
+        pass
+    return None
 
 
 def hint_subdirs(cands):
@@ -287,7 +328,14 @@ def main():
 
     print('対象フォルダ:')
     for c in a.src:
-        print('    %s%s' % (c, '' if Path(c).is_dir() else '  （見つかりません）'))
+        p_ = Path(c)
+        if p_.is_dir():
+            print('    %s' % c)
+        else:
+            hit = match_by_name(p_)
+            print('    %s' % c
+                  + ('\n      → %s として読み込みます' % hit if hit is not None
+                     else '  （見つかりません）'))
     print('対象年      : %s' % ('%d年' % a.year if a.year else 'フォルダ内の全部'))
     m = build(a.src, a.year, a.out)
 
