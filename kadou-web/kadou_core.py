@@ -222,11 +222,17 @@ def all_month_sheets(wb):
     return sorted(out)
 
 
-def extract_all(path, machine=None):
+def extract_all(path, machine=None, skipped=None):
     """1ファイルから、入っている全部の年・月を読む
 
     13年〜25年のように複数年ぶんが1フォルダにある場合でも、
     ファイルを1回開くだけで全年を取れるようにしてある。
+
+    見出しの形が違う月次シートは、そのシートだけ飛ばす。同じファイルの
+    他の月まで巻き添えで捨てないため（実際、篠原稼動日報の15年11月に
+    管理番号の列が無く、読めていた8〜10月まで落ちていた）。
+    飛ばしたシートは skipped に (シート名, 理由) で積む。
+    1枚も読めなかったときは、これまでどおり最初の理由をそのまま送出する。
 
     戻り値: ({年2桁: {月: [明細行, ...]}},
              {年2桁: {月: [日次集計行, ...]}},
@@ -236,13 +242,23 @@ def extract_all(path, machine=None):
     machine = machine or Path(path).stem
     src = Path(path).name
     got, days, cols = OrderedDict(), OrderedDict(), []
+    read, errs = 0, []
     for year2, month, sheet in all_month_sheets(wb):
-        rows, dd, cc = extract_sheet(wb.sheet_by_name(sheet), machine, src)
+        try:
+            rows, dd, cc = extract_sheet(wb.sheet_by_name(sheet), machine, src)
+        except ValueError as e:
+            errs.append((sheet, str(e)))
+            if skipped is not None:
+                skipped.append((sheet, str(e)))
+            continue
+        read += 1
         got.setdefault(year2, OrderedDict()).setdefault(month, []).extend(rows)
         days.setdefault(year2, OrderedDict()).setdefault(month, []).extend(dd)
         for n in cc:
             if n not in cols:
                 cols.append(n)
+    if errs and not read:                      # 1枚も読めない＝そもそも稼動日報ではない
+        raise ValueError(errs[0][1])
     return got, days, cols
 
 

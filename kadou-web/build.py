@@ -22,6 +22,7 @@
 import argparse
 import datetime
 import json
+import re
 import sys
 import traceback
 import unicodedata
@@ -124,6 +125,103 @@ def hint_subdirs(cands):
     return ''
 
 
+NEW, OLD = '新', '旧'
+YEAR_NEW = re.compile(r'^★新・(\d{2})年稼動$')
+YEAR_OLD = re.compile(r'^(\d{2})年稼働$')
+
+
+def inner_dir(d):
+    """★新・16年稼動\★新・16年稼動 のような同名の入れ子は、中側を使う"""
+    nested = d / d.name
+    return nested if nested.is_dir() else d
+
+
+def year_folders(src):
+    """稼動日報が入っている年フォルダを集める
+
+      ★新・NN年稼動 … その年の正（新しい方）
+      NN年稼働      … ★新 に無い年・月を補う古い方
+
+    src 自身が年フォルダのこともある（U: の ★新・26年稼動 を直接指定した場合）。
+    年フォルダが1つも無ければ空を返し、呼び出し側が従来どおり配下を全部読む。
+
+    戻り値: [(フォルダ, NEW か OLD), ...]
+    """
+    src = Path(src)
+    if YEAR_NEW.match(src.name):
+        return [(inner_dir(src), NEW)]
+    if YEAR_OLD.match(src.name):
+        return [(src, OLD)]
+    if not src.is_dir():
+        return []
+    out = []
+    for d in sorted(src.iterdir()):
+        if not d.is_dir():
+            continue
+        if YEAR_NEW.match(d.name):
+            out.append((inner_dir(d), NEW))
+        elif YEAR_OLD.match(d.name):
+            out.append((d, OLD))
+    return out
+
+
+def report_files(folder, kind):
+    """年フォルダ直下の稼動日報だけを返す
+
+    サブフォルダ（日報取込用 など）は同じ日報の写しなので見ない。
+    集約表・稼働率・断裁機・軽ｵﾌ印刷機などは名前で外れる。
+    """
+    out = []
+    for p in sorted(folder.glob('*.xls')):
+        if p.name.startswith('~$'):
+            continue
+        if kind == NEW:
+            if p.name.startswith('新') and '稼動日報' in p.name:
+                out.append(p)                      # 新25・菊全UV稼動日報【新台】.xls も拾う
+        elif p.name.endswith('稼動日報.xls'):
+            out.append(p)                          # 三菱稼動日報.xls / 小森1号機稼動日報.xls
+    return out
+
+
+def file_key(p):
+    """同じファイル（名前・サイズ・更新日時が同じ）かどうかの目印"""
+    try:
+        st = p.stat()
+        return (p.name, st.st_size, int(st.st_mtime))
+    except OSError:
+        return (p.name, None, None)
+
+
+def collect_files(srcs):
+    """読む対象の稼動日報を、年フォルダごとに1セットだけ集める
+
+    「☆平版印刷課印刷稼働日報」のような控えのフォルダや、年フォルダの中の
+    「日報取込用」は同じ日報の写しで、そのまま読むと同じ通し数を何度も数えて
+    しまう（2016年は4回数えていた）。年フォルダの直下だけを見ることで防ぐ。
+
+    戻り値: [(パス, NEW か OLD), ...]
+    """
+    if isinstance(srcs, (str, Path)):
+        srcs = [srcs]
+    got, seen = [], set()
+    for src in srcs:
+        folders = year_folders(src)
+        if not folders:                            # 年フォルダが無い形（テスト用など）
+            for p in find_xls([src]):
+                key = file_key(p)
+                if key not in seen:
+                    seen.add(key)
+                    got.append((p, NEW))
+            continue
+        for folder, kind in folders:
+            for p in report_files(folder, kind):
+                key = file_key(p)
+                if key not in seen:
+                    seen.add(key)
+                    got.append((p, kind))
+    return got
+
+
 def find_xls(srcs):
     """対象フォルダ配下の .xls を集める
 
@@ -150,48 +248,58 @@ def find_xls(srcs):
     return files
 
 
-def read_folder(srcs):
-    """フォルダ配下の .xls を1回ずつ開いて、年→月→明細行 にまとめる
+def read_folder(files):
+    """稼動日報を1回ずつ開いて、年→月→明細行 にまとめる
+
+    files は collect_files が返す [(パス, NEW か OLD), ...]。
+    同じ年・月が「★新・NN年稼動」と「NN年稼働」の両方にあるときは ★新 だけを採る
+    （★新 が改訂版。両方入れると同じ通し数を二重に数えてしまう）。
 
     戻り値: (rows, daily, cols, file_info, warnings)
       rows  = {年4桁: {月: [明細行, ...]}}
       daily = {年4桁: {月: [日次集計行, ...]}}
     """
-    rows, daily, cols = OrderedDict(), OrderedDict(), []
-    file_info, warnings = [], []
+    part = {NEW: (OrderedDict(), OrderedDict()), OLD: (OrderedDict(), OrderedDict())}
+    cols, file_info, warnings = [], [], []
 
-    for path in find_xls(srcs):
+    for path, kind in files:
         if path.suffix.lower() != '.xls':
             warnings.append('%s は旧形式(.xls)ではないため読み飛ばしました。' % path.name)
             continue
+        skipped = []
         try:
-            got, days, cc = extract_all(path)
+            got, days, cc = extract_all(path, skipped=skipped)
         except Exception as e:                                   # noqa: BLE001
             warnings.append('%s を読めませんでした: %s' % (path.name, e))
             traceback.print_exc(file=sys.stderr)
             continue
+        for sheet, why in skipped:
+            warnings.append('%s の「%s」は形式が違うため飛ばしました: %s'
+                            % (path.name, sheet, why))
 
         for n in cc:
             if n not in cols:
                 cols.append(n)
 
+        krows, kdaily = part[kind]
         # このファイル自身の年別の明細行数を数える（他のファイルの分と混ぜない）
         per_year, total = OrderedDict(), 0
         for year2, months in got.items():
             year = 2000 + year2
             e = per_year.setdefault(year, {'months': [], 'rows': 0})
             for month, rr in months.items():
-                rows.setdefault(year, OrderedDict()).setdefault(month, []).extend(rr)
+                krows.setdefault(year, OrderedDict()).setdefault(month, []).extend(rr)
                 e['months'].append(month)
                 e['rows'] += len(rr)
                 total += len(rr)
         for year2, months in days.items():
             for month, dd in months.items():
-                daily.setdefault(2000 + year2, OrderedDict()).setdefault(month, []).extend(dd)
+                kdaily.setdefault(2000 + year2, OrderedDict()).setdefault(month, []).extend(dd)
 
         if not per_year:
             warnings.append('%s に月次シート（「26年1月」形式）がありません。' % path.name)
         file_info.append({'name': path.name, 'machine': path.stem, 'path': str(path),
+                          'kind': kind,
                           'years': {str(y): {'months': sorted(e['months']), 'rows': e['rows']}
                                     for y, e in per_year.items()},
                           'rows': total})
@@ -199,7 +307,45 @@ def read_folder(srcs):
               % (path.name,
                  '、'.join('%d年' % y for y in sorted(per_year)) or '月次シートなし',
                  total))
-    return rows, daily, cols, file_info, warnings
+
+    rows, daily, notes = prefer_new(part)
+    return rows, daily, cols, file_info, warnings + notes
+
+
+def prefer_new(part):
+    """★新 にある年・月は ★新 だけを採り、無い月だけ古いフォルダで補う
+
+    2015年は8月から ★新・15年稼動 が始まっており、1〜7月は「15年稼働」にしかない。
+    重なる8〜12月を両方入れると二重になるため、月ごとに ★新 を優先する。
+
+    戻り値: (rows, daily, [お知らせ, ...])
+    """
+    new_rows, new_daily = part[NEW]
+    old_rows, old_daily = part[OLD]
+    covered = {(y, m) for y, ms in new_rows.items() for m in ms}
+
+    rows, daily = OrderedDict(), OrderedDict()
+    for src_rows, src_daily, is_new in ((new_rows, new_daily, True),
+                                        (old_rows, old_daily, False)):
+        for year, months in src_rows.items():
+            for month, rr in months.items():
+                if not is_new and (year, month) in covered:
+                    continue                       # ★新 が正。古い方は数えない
+                rows.setdefault(year, OrderedDict()).setdefault(month, []).extend(rr)
+        for year, months in src_daily.items():
+            for month, dd in months.items():
+                if not is_new and (year, month) in covered:
+                    continue
+                daily.setdefault(year, OrderedDict()).setdefault(month, []).extend(dd)
+
+    notes = []
+    for year in sorted({y for y, _m in covered}):
+        dup = sorted(m for m in old_rows.get(year, ()) if (year, m) in covered)
+        if dup:
+            notes.append('%d年の%sは「★新・%02d年稼動」の内容を使いました'
+                         '（古いフォルダの同じ月は数えていません）。'
+                         % (year, '、'.join('%d月' % m for m in dup), year % 100))
+    return rows, daily, notes
 
 
 def build_year(year, by_month, daily_by_month, cols, files, src, warnings):
@@ -279,11 +425,12 @@ def build(src, year=None, outdir=None):
         raise SystemExit(msg)
 
     outdir = Path(outdir or WEB)
-    if not find_xls(srcs):
-        raise SystemExit('.xls ファイルが1つも見つかりません:\n    '
+    targets = collect_files(srcs)
+    if not targets:
+        raise SystemExit('稼動日報の .xls が1つも見つかりません:\n    '
                          + '\n    '.join(str(x) for x in srcs))
 
-    rows, daily, cols, files, warnings = read_folder(srcs)
+    rows, daily, cols, files, warnings = read_folder(targets)
     # 見つからなかったフォルダは警告にしない。U: が使えるPCではUNC側が、
     # 使えないPCではU:側が必ず存在しないため、毎回出ると邪魔になる。
     # 「元ファイル」タブでだけ確認できるようにする。
@@ -314,6 +461,16 @@ def build(src, year=None, outdir=None):
             'detail':  sum(s['detail'] for s in data['stats']),
             'tsu':     sum(s['tsuGroups'] for s in data['stats']),
         })
+
+    if not year:
+        # 年を絞らずに作り直したときは、今回作らなかった年のファイルを消す。
+        # 前回の読み込みで出ていた年が、画面に残り続けないようにするため。
+        for p in outdir.glob('data_*.json'):
+            try:
+                if int(p.stem.split('_')[1]) not in years:
+                    p.unlink()
+            except (ValueError, IndexError, OSError):
+                pass
 
     manifest = {
         'generated': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),

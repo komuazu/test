@@ -103,6 +103,34 @@ def main():
               'パスの前後の空白と引用符を落とす')
         check(server.clean_src(quoted) == build.clean_src(quoted),
               'server.py も build.py と同じようにパスを整える')
+        # ── 年フォルダごとに1セットだけ読む（同じ日報の写しを数えない） ──
+        base = build.collect_files([multi])
+        check(len(base) == 6 and all(k == build.NEW for _p, k in base),
+              '★新の年フォルダ直下だけを読む  → %d件' % len(base))
+
+        shutil.copytree(multi / '★新・23年稼動', multi / '☆控え' / '★新・23年稼動')
+        shutil.copytree(multi / '★新・24年稼動', multi / '★新・23年稼動' / '日報取込用')
+        check(len(build.collect_files([multi])) == 6,
+              '控えフォルダと「日報取込用」の写しは読まない  → %d件'
+              % len(build.collect_files([multi])))
+
+        # ── ★新 が正。古いフォルダに同じ月があっても増えない ──
+        a = build.build([str(multi)], 2023, tmp / 'out_a')['years'][0]
+        (multi / '23年稼働').mkdir()
+        shutil.copy(multi / '★新・23年稼動' / '新23・A全UV稼動日報.xls',
+                    multi / '23年稼働' / '三菱稼動日報.xls')
+        b = build.build([str(multi)], 2023, tmp / 'out_b')['years'][0]
+        check(a['tsu'] == b['tsu'] and a['detail'] == b['detail'],
+              '古いフォルダに同じ月があっても通し数は増えない  → %s'
+              % format(b['tsu'], ','))
+
+        part = {build.NEW: ({2015: {8: ['新8月']}}, {}),
+                build.OLD: ({2015: {7: ['旧7月'], 8: ['旧8月']}}, {})}
+        rows, _daily, notes = build.prefer_new(part)
+        check(rows[2015][8] == ['新8月'] and rows[2015][7] == ['旧7月'],
+              '重なる月は★新、★新に無い月は古いフォルダから採る')
+        check(notes and '2015年の8月' in notes[0], '入れ替えた月をお知らせに出す')
+
         # ── 同じファイルを二重に数えない ──
         dup = tmp / 'dup'
         shutil.copytree(sample, dup)
