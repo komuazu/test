@@ -41,13 +41,23 @@ def resolve_src(src):
 
 
 def hint_subdirs(cands):
-    """フォルダが見つからないとき、親フォルダにある候補を案内する"""
+    """フォルダが見つからないとき、親フォルダにある候補を案内する
+
+    候補のパスをさかのぼって、実在する一番深いフォルダの中身を見せる。
+    どこまでは合っていて、どこから違うのかが分かるようにするため。
+    """
+    here = Path.cwd().resolve()
     for c in cands:
-        parent = Path(c).parent
-        if parent.is_dir():
+        for parent in Path(c).parents:
+            if str(parent) in ('.', '', '/') or not parent.is_dir():
+                continue
+            if parent.resolve() == here:      # アプリ自身のフォルダは案内にならない
+                break
             subs = sorted(d.name for d in parent.iterdir() if d.is_dir())
             if subs:
-                return '%s の中にあるフォルダ: %s' % (parent, '、'.join(subs[:12]))
+                return 'ここまでは実在します: %s\n  その中にあるフォルダ: %s' % (
+                    parent, '、'.join(subs[:12]))
+            break
     return ''
 
 

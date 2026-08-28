@@ -5,3 +5,6 @@ memo.json.tmp
 web/data.json
 __pycache__/
 *.pyc
+
+# 配布用ZIP（make_zip.py で作る）
+*.zip
