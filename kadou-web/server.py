@@ -32,8 +32,14 @@ CONFIG = HERE / 'config.json'
 MEMO = HERE / 'memo.json'
 DATA = WEB / 'data.json'
 
+# ショートカット（.lnk）から確認した実際のパス。
+#   リンク先: U:\製造本部\第2工場\【第二工場】\☆第二工場日報・稼動報告\☆第二工場日報・稼動報告
+#   U: の実体: \\ntfham001\Users
+# U: が割り当てられていないPCでも開けるよう、UNCパスを予備として持たせる。
+_BASE = r'製造本部\第2工場\【第二工場】\☆第二工場日報・稼動報告\☆第二工場日報・稼動報告\★新・26年稼動'
 DEFAULT_CONFIG = {
-    'src': r'U:\製造本部\第2工場\【第二工場】\☆第二工場日報・稼動報告\☆第二工場日報・稼動報告\★新・26年稼動',
+    'src': 'U:\\' + _BASE,
+    'srcAlt': [r'\\ntfham001\Users' + '\\' + _BASE],
     'year': 2026,
     'port': 8765,
 }
@@ -73,11 +79,16 @@ def save_memo(memo):
         os.replace(tmp, MEMO)
 
 
+def src_candidates(cfg):
+    """稼動日報フォルダの候補（本命 → 予備のUNCパス）"""
+    return [cfg.get('src')] + list(cfg.get('srcAlt') or [])
+
+
 def rebuild(cfg):
     """稼動日報フォルダを読み直して web/data.json を作り直す"""
     sys.path.insert(0, str(HERE))
     import build                                                 # noqa: PLC0415
-    return build.build(cfg['src'], int(cfg['year']), DATA)
+    return build.build(src_candidates(cfg), int(cfg['year']), DATA)
 
 
 class Handler(SimpleHTTPRequestHandler):

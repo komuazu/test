@@ -157,6 +157,14 @@ with sync_playwright() as pw:
     name = d.value.suggested_filename
     check(name.endswith('.csv') and '印刷実績' in name, 'CSV出力できる → ' + name)
 
+    # ── 設定ダイアログ ──
+    pg.click('#btnSetting')
+    pg.wait_for_timeout(300)
+    check(pg.locator('#inSrc').input_value().endswith('sample'), '設定に現在のフォルダが入る')
+    check('今回読み込んだフォルダ' in pg.locator('#altNote').inner_text(),
+          '実際に読み込んだフォルダが分かる')
+    pg.click('#dlgCancel')
+
     check(not errors, 'JavaScript エラーなし' + ('' if not errors else ': ' + '; '.join(errors[:3])))
     b.close()
 

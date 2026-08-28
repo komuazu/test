@@ -26,6 +26,31 @@ from kadou_core import DEPTS, consolidate, extract_year, sort_groups   # noqa: E
 HERE = Path(__file__).resolve().parent
 
 
+def resolve_src(src):
+    """稼動日報フォルダの候補から、実在するものを1つ選ぶ。
+
+    src は文字列でも候補のリストでもよい。U: が割り当てられていないPCでも
+    UNCパス（\\\\ntfham001\\Users\\...）で開けるようにするため。
+    """
+    cands = [src] if isinstance(src, str) else list(src)
+    cands = [c for c in cands if c]
+    for c in cands:
+        if Path(c).is_dir():
+            return Path(c), cands
+    return None, cands
+
+
+def hint_subdirs(cands):
+    """フォルダが見つからないとき、親フォルダにある候補を案内する"""
+    for c in cands:
+        parent = Path(c).parent
+        if parent.is_dir():
+            subs = sorted(d.name for d in parent.iterdir() if d.is_dir())
+            if subs:
+                return '%s の中にあるフォルダ: %s' % (parent, '、'.join(subs[:12]))
+    return ''
+
+
 def find_xls(src):
     """対象フォルダ配下の .xls を集める（Excel の一時ファイルは除外）"""
     files = []
@@ -37,9 +62,13 @@ def find_xls(src):
 
 
 def build(src, year, out):
-    src = Path(src)
-    if not src.is_dir():
-        raise SystemExit('フォルダが見つかりません: %s' % src)
+    src, cands = resolve_src(src)
+    if src is None:
+        msg = 'フォルダが見つかりません:\n    ' + '\n    '.join(cands)
+        hint = hint_subdirs(cands)
+        if hint:
+            msg += '\n  ' + hint
+        raise SystemExit(msg)
 
     year2 = year % 100
     files = find_xls(src)

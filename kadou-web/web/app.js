@@ -629,7 +629,13 @@ $('#btnCsvRaw').onclick = csvRaw;
 
 $('#btnSetting').onclick = function () {
   fetch('/api/config').then(function (r) { return r.json(); }).then(function (c) {
-    $('#inSrc').value = c.src; $('#inYear').value = c.year; $('#dlg').showModal();
+    $('#inSrc').value = c.src; $('#inYear').value = c.year;
+    // U: が割り当てられていないPC向けの予備パスと、実際に読んだフォルダを知らせる
+    var alt = (c.srcAlt || []).map(esc).join('<br>　　');
+    $('#altNote').innerHTML = (alt
+      ? '上のフォルダが見つからないときは、次のパスも自動で試します（U: が割り当てられていないPC向け）:<br>　　' + alt + '<br>'
+      : '') + (DATA ? '今回読み込んだフォルダ: <b>' + esc(DATA.source) + '</b>' : '');
+    $('#dlg').showModal();
   }).catch(function () {
     $('#inSrc').value = DATA ? DATA.source : ''; $('#inYear').value = DATA ? DATA.year : 2026;
     $('#dlg').showModal();
