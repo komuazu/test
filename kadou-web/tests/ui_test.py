@@ -147,7 +147,20 @@ with sync_playwright() as pw:
     pg.locator('nav.tabs button[data-view=src]').click()
     pg.wait_for_selector('#files tbody tr')
     check(pg.locator('#files tbody tr').count() == 3, '読み込んだファイルが3件')
+    # ファイル別の明細行の合計が、検証タブの明細行合計と一致すること
+    fr = [int(pg.locator('#files tbody tr').nth(i).locator('td').last.inner_text().replace(',', ''))
+          for i in range(3)]
+    sr = [int(pg.locator('#stats tbody tr').nth(i).locator('td').nth(2).inner_text().replace(',', ''))
+          for i in range(pg.locator('#stats tbody tr').count())]
+    check(sum(fr) == sum(sr), 'ファイル別の明細行の合計が検証の合計と一致  → %d / %d'
+          % (sum(fr), sum(sr)))
     check('不一致' not in pg.locator('#stats tbody').inner_text(), '検証: 統合前後の通し数がすべて一致')
+    sp = pg.locator('#srcPath').inner_text()
+    check('読込元フォルダ' in sp, '読込元フォルダが一覧で出る')
+    check('/no/such/folder' in sp and '読み飛ばし' in sp,
+          '無かったフォルダは警告ではなく元ファイルタブに出る')
+    check('/no/such/folder' not in pg.locator('#warns').inner_text(),
+          '無かったフォルダで注意バナーを出さない')
     pg.screenshot(path=str(SHOT / '04_元ファイル.png'), full_page=True)
 
     # ── CSV 出力 ──
@@ -157,10 +170,35 @@ with sync_playwright() as pw:
     name = d.value.suggested_filename
     check(name.endswith('.csv') and '印刷実績' in name, 'CSV出力できる → ' + name)
 
+    # ── 年の切替（複数年フォルダ） ──
+    pg.locator('nav.tabs button[data-view=year]').click()      # マトリクスを見える状態に
+    yopts = pg.locator('#selYear option')
+    if yopts.count() > 1:
+        years = [int(yopts.nth(i).get_attribute('value')) for i in range(yopts.count())]
+        check(years == sorted(years), '年が古い順に並ぶ  → %s' % years)
+        check(pg.locator('#selYear').input_value() == str(years[-1]),
+              '最初は一番新しい年が選ばれる')
+        pg.select_option('#selYear', str(years[0]))
+        pg.wait_for_function('document.querySelector("#ttl").textContent.indexOf("%d年") === 0'
+                             % years[0])
+        pg.wait_for_selector('#matrix tbody tr')
+        check('%d年' % years[0] in pg.locator('#ttl').inner_text(),
+              '%d年に切り替わる' % years[0])
+        t0 = pg.locator('#matrix tbody tr.total td').last.inner_text()
+        pg.screenshot(path=str(SHOT / '09_年切替.png'), full_page=True)
+        pg.select_option('#selYear', str(years[-1]))
+        pg.wait_for_function('document.querySelector("#ttl").textContent.indexOf("%d年") === 0'
+                             % years[-1])
+        t1 = pg.locator('#matrix tbody tr.total td').last.inner_text()
+        check(t0 != t1, '年ごとに中身が入れ替わる  → %s / %s'
+              % (t0.split(chr(10))[0], t1.split(chr(10))[0]))
+    else:
+        check(True, '年が1つだけのフォルダ（年の切替は非表示）')
+
     # ── 設定ダイアログ ──
     pg.click('#btnSetting')
     pg.wait_for_timeout(300)
-    check(pg.locator('#inSrc').input_value().endswith('sample'), '設定に現在のフォルダが入る')
+    check('sample' in pg.locator('#inSrc').input_value(), '設定に現在のフォルダが入る')
     check('今回読み込んだフォルダ' in pg.locator('#altNote').inner_text(),
           '実際に読み込んだフォルダが分かる')
     pg.click('#dlgCancel')

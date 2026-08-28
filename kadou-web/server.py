@@ -30,17 +30,21 @@ HERE = Path(__file__).resolve().parent
 WEB = HERE / 'web'
 CONFIG = HERE / 'config.json'
 MEMO = HERE / 'memo.json'
-DATA = WEB / 'data.json'
+MANIFEST = WEB / 'years.json'
 
-# ショートカット（.lnk）から確認した実際のパス。
-#   リンク先: U:\製造本部\第2工場\【第二工場】\☆第二工場日報・稼動報告\☆第二工場日報・稼動報告
-#   U: の実体: \\ntfham001\Users
-# U: が割り当てられていないPCでも開けるよう、UNCパスを予備として持たせる。
-_BASE = r'製造本部\第2工場\【第二工場】\☆第二工場日報・稼動報告\☆第二工場日報・稼動報告\★新・26年稼動'
+# 稼動日報の置き場所。実在するフォルダを全部読み、年ごとにまとめる。
+#   ・デスクトップの「13年稼動～25年稼動」（過去分）
+#   ・U: の「★新・26年稼動」（今年ぶん）
+# U: の実体は \\ntfham001\Users（ショートカットから確認）。U: が割り当てられて
+# いないPCでも開けるようUNCパスも並べてある。同じファイルは二重に数えない。
+_U26 = r'製造本部\第2工場\【第二工場】\☆第二工場日報・稼動報告\☆第二工場日報・稼動報告\★新・26年稼動'
 DEFAULT_CONFIG = {
-    'src': 'U:\\' + _BASE,
-    'srcAlt': [r'\\ntfham001\Users' + '\\' + _BASE],
-    'year': 2026,
+    'src': [
+        str(Path.home() / 'Desktop' / '13年稼動～25年稼動'),
+        'U:\\' + _U26,
+        r'\\ntfham001\Users' + '\\' + _U26,
+    ],
+    'year': None,        # None = 見つかった年を全部読む
     'port': 8765,
 }
 
@@ -80,15 +84,22 @@ def save_memo(memo):
 
 
 def src_candidates(cfg):
-    """稼動日報フォルダの候補（本命 → 予備のUNCパス）"""
-    return [cfg.get('src')] + list(cfg.get('srcAlt') or [])
+    """稼動日報フォルダの一覧（実在するものだけが実際に読まれる）"""
+    src = cfg.get('src')
+    lst = list(src) if isinstance(src, list) else ([src] if src else [])
+    return lst + list(cfg.get('srcAlt') or [])      # 旧い config.json との互換
 
 
 def rebuild(cfg):
-    """稼動日報フォルダを読み直して web/data.json を作り直す"""
+    """稼動日報フォルダを読み直して web/ のデータを作り直す
+
+    year が空なら、フォルダに入っている年を全部作る（13年〜25年のような
+    複数年フォルダに対応するため）。
+    """
     sys.path.insert(0, str(HERE))
     import build                                                 # noqa: PLC0415
-    return build.build(src_candidates(cfg), int(cfg['year']), DATA)
+    year = cfg.get('year')
+    return build.build(src_candidates(cfg), int(year) if year else None, WEB)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -137,16 +148,24 @@ class Handler(SimpleHTTPRequestHandler):
 
             if self.path.startswith('/api/rebuild'):
                 b = self._body()
-                if b.get('src'):
-                    Handler.cfg['src'] = b['src']
-                if b.get('year'):
-                    Handler.cfg['year'] = int(b['year'])
+                if b.get('src') is not None:
+                    # 画面からは1行1フォルダで来る
+                    v = b['src']
+                    if isinstance(v, str):
+                        v = [x.strip() for x in v.splitlines() if x.strip()]
+                    if v:
+                        Handler.cfg['src'] = v
+                        Handler.cfg.pop('srcAlt', None)
+                # 年は空欄可（空 = フォルダに入っている年を全部）
+                if 'year' in b:
+                    Handler.cfg['year'] = int(b['year']) if str(b['year']).strip() else None
                 save_config(Handler.cfg)
-                data = rebuild(Handler.cfg)
+                m = rebuild(Handler.cfg)
                 return self._json({'ok': True,
-                                   'generated': data['generated'],
-                                   'records': len(data['records']),
-                                   'warnings': data['warnings']})
+                                   'generated': m['generated'],
+                                   'years': [y['year'] for y in m['years']],
+                                   'records': sum(y['records'] for y in m['years']),
+                                   'warnings': m['warnings']})
         except Exception as e:                                   # noqa: BLE001
             traceback.print_exc()
             return self._json({'ok': False, 'error': str(e)}, 500)
@@ -164,7 +183,8 @@ def free_port(port):
 def main():
     cfg = load_config()
     p = argparse.ArgumentParser(description='稼動日報 Web アプリを起動します')
-    p.add_argument('--src', help='稼動日報フォルダ')
+    p.add_argument('--src', action='append',
+                   help='稼動日報フォルダ（複数指定可: --src A --src B）')
     p.add_argument('--year', type=int, help='対象年')
     p.add_argument('--port', type=int, help='ポート番号')
     p.add_argument('--no-build', action='store_true', help='読み直さず前回のデータで起動')
@@ -176,13 +196,15 @@ def main():
     save_config(cfg)
 
     if not a.no_build:
-        print('稼動日報を読み込んでいます … %s' % cfg['src'])
+        print('稼動日報を読み込んでいます …')
+        for c in src_candidates(cfg):
+            print('    %s%s' % (c, '' if Path(c).is_dir() else '  （見つかりません）'))
         try:
             rebuild(cfg)
             print('読み込み完了\n')
         except SystemExit as e:
             print('  [エラー] %s' % e)
-            if not DATA.exists():
+            if not MANIFEST.exists():
                 print('\n  フォルダの場所が違う可能性があります。')
                 print('  画面右上の「データ更新」からフォルダを指定し直すこともできます。\n')
         except Exception as e:                                   # noqa: BLE001
@@ -194,7 +216,8 @@ def main():
     url = 'http://127.0.0.1:%d/' % port
     srv = ThreadingHTTPServer(('127.0.0.1', port), partial(Handler))
     print('=' * 60)
-    print('  稼動日報 %d年 印刷実績ビューア' % cfg['year'])
+    print('  稼動日報 印刷実績ビューア%s'
+          % ('（%d年）' % cfg['year'] if cfg.get('year') else ''))
     print('  ブラウザで開いてください →  %s' % url)
     print('  終了するには この画面で Ctrl+C を押してください')
     print('=' * 60)

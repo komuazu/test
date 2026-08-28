@@ -3,6 +3,8 @@ config.json
 memo.json
 memo.json.tmp
 web/data.json
+web/data_*.json
+web/years.json
 __pycache__/
 *.pyc
 

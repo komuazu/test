@@ -12,8 +12,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SKIP_DIRS = {'__pycache__', '.git'}
-SKIP_FILES = {'config.json', 'memo.json', 'memo.json.tmp', 'data.json',
-              'make_zip.py', '.gitignore'}
+SKIP_FILES = {'config.json', 'memo.json', 'memo.json.tmp', 'make_zip.py', '.gitignore'}
+
+
+def is_generated(rel):
+    """起動のたびに作り直されるデータは配布物に入れない"""
+    return rel.parent.name == 'web' and (
+        rel.name == 'years.json' or rel.name.startswith('data_') or rel.name == 'data.json')
 
 
 def main():
@@ -24,6 +29,8 @@ def main():
             continue
         rel = p.relative_to(HERE)
         if any(part in SKIP_DIRS for part in rel.parts) or p.name in SKIP_FILES:
+            continue
+        if is_generated(rel):
             continue
         if p.resolve() == out.resolve():
             continue

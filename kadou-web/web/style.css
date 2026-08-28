@@ -25,6 +25,11 @@ header{
 header h1{margin:0;font-size:18px;font-weight:700;letter-spacing:.02em}
 header .meta{font-size:11.5px;opacity:.85;margin-left:-8px}
 header .spacer{flex:1}
+header select{
+  background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.4);
+  border-radius:6px; padding:5px 10px; font-size:13px; font-weight:700; cursor:pointer;
+}
+header select option{background:#fff; color:var(--ink); font-weight:400}
 header button{
   background:rgba(255,255,255,.12); color:#fff; border:1px solid rgba(255,255,255,.35);
   border-radius:6px; padding:6px 13px; cursor:pointer; font-size:12.5px;
@@ -89,7 +94,7 @@ td.inp.filled{background:#fff3b0}
 .bars{display:flex; align-items:flex-end; gap:10px; height:210px; padding:8px 4px 0; overflow-x:auto}
 .bar{flex:1; min-width:42px; display:flex; flex-direction:column; align-items:center; gap:4px; height:100%}
 .bar .track{width:100%; flex:1; display:flex; flex-direction:column; justify-content:flex-end}
-.bar .stack{width:100%; flex:0 0 auto; display:flex; flex-direction:column; border-radius:4px 4px 0 0; overflow:hidden; min-height:2px}
+.bar .stack{width:100%; flex:0 0 auto; max-height:88%; display:flex; flex-direction:column; border-radius:4px 4px 0 0; overflow:hidden; min-height:2px}
 .bar .seg{width:100%} .bar .seg.hq{background:var(--hq)} .bar .seg.tk{background:var(--tk)} .bar .seg.ik{background:var(--ik)}
 .bar .lab{font-size:11px; color:var(--sub); white-space:nowrap}
 .bar .val{font-size:10.5px; color:var(--navy); font-variant-numeric:tabular-nums; white-space:nowrap}
@@ -120,7 +125,8 @@ dialog::backdrop{background:rgba(20,28,45,.45)}
 dialog .dh{background:var(--navy); color:#fff; padding:11px 18px; font-weight:700}
 dialog .db{padding:18px}
 dialog label{display:block; font-size:12px; color:var(--sub); margin:12px 0 4px}
-dialog input{width:100%; border:1px solid var(--line); border-radius:6px; padding:7px 10px}
+dialog input,dialog textarea{width:100%; border:1px solid var(--line); border-radius:6px;
+  padding:7px 10px; font-family:Consolas,'Courier New',monospace; font-size:12px; resize:vertical}
 dialog .df{padding:0 18px 18px; display:flex; gap:10px; justify-content:flex-end}
 dialog .df button{border-radius:6px; padding:7px 18px; cursor:pointer; border:1px solid var(--line); background:#fff}
 dialog .df button.pri{background:var(--navy); color:#fff; border-color:var(--navy)}

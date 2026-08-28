@@ -112,5 +112,40 @@ def main(outdir):
     print('作成:', outdir)
 
 
+def make_multi(outdir):
+    """複数年（年ごとのサブフォルダ）を模したダミーを作る
+
+    「13年稼動～25年稼動」のように、1つのフォルダの下に年別フォルダが並ぶ形。
+    """
+    outdir = Path(outdir)
+    D = datetime.date
+    clients = ['㈱アルファ商事', 'ベータ工業㈱', 'デルタ印刷', 'イプシロン㈱', 'イータ商会']
+    codes = [1110, 1120, 2100, 2140, 3810, 3820]
+    items = ['カタログ', 'パンフレット', 'DM', 'ポスター', '会報誌']
+
+    for year in (2023, 2024, 2025):
+        d = outdir / ('★新・%d年稼動' % (year % 100))
+        d.mkdir(parents=True, exist_ok=True)
+        for mi, machine in enumerate(('A全UV', '菊全UV')):
+            wb = xlwt.Workbook(encoding='utf-8')
+            for mo in range(1, 13):
+                rows = []
+                for i in range(5):
+                    rows.append((D(year, mo, 1 + (i * 3 + mo) % 26),
+                                 '%d%02d%02d%d' % (year % 100, mo, i, mi),
+                                 clients[(mo + i + mi) % len(clients)],
+                                 '%s %d月号' % (items[(mo + i) % len(items)], mo),
+                                 codes[(mo * 2 + i + mi) % len(codes)],
+                                 2000 + ((year + mo * 137 + i * 911) % 40) * 1000,
+                                 [2, 4, 4, 6][(i + mo) % 4],
+                                 [0, 0, 4, 4][(i + mo) % 4]))
+                sheet(wb, '%d年%d月' % (year % 100, mo), rows)
+            wb.save(str(d / ('新%d・%s稼動日報.xls' % (year % 100, machine))))
+    print('作成（複数年）:', outdir)
+
+
 if __name__ == '__main__':
-    main(sys.argv[1] if len(sys.argv) > 1 else 'tests/sample')
+    if len(sys.argv) > 2 and sys.argv[2] == '--multi':
+        make_multi(sys.argv[1])
+    else:
+        main(sys.argv[1] if len(sys.argv) > 1 else 'tests/sample')

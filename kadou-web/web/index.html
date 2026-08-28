@@ -11,6 +11,7 @@
 
 <header>
   <h1 id="ttl">稼動日報 印刷実績ビューア</h1>
+  <select id="selYear" title="年を切り替えます"></select>
   <span class="meta" id="meta"></span>
   <span class="spacer"></span>
   <span class="saved" id="saved">保存しました</span>
@@ -130,10 +131,10 @@
 <dialog id="dlg">
   <div class="dh">設定</div>
   <div class="db">
-    <label>稼動日報フォルダ（★新・26年稼動 のパス）</label>
-    <input id="inSrc" type="text" spellcheck="false">
-    <label>対象年</label>
-    <input id="inYear" type="number" min="2000" max="2100">
+    <label>稼動日報フォルダ（1行に1つ。実在するフォルダを全部読みます）</label>
+    <textarea id="inSrc" rows="4" spellcheck="false"></textarea>
+    <label>対象年（空欄にすると、フォルダに入っている年を全部読み込みます）</label>
+    <input id="inYear" type="number" min="2000" max="2100" placeholder="全部">
     <p class="note">「保存して読み直す」を押すと、このフォルダの .xls を読み直します。
       読み込みは一時フォルダへコピーしてから行うため、元のExcelファイルには一切触れません。</p>
     <p class="note" id="altNote"></p>

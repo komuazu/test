@@ -209,23 +209,50 @@ def extract_sheet(sh, machine, src):
     return out, daily, [n for _, n in cols]
 
 
-def extract_year(path, year2, machine=None):
-    """1ファイルから、その年の全月分を返す
+def all_month_sheets(wb):
+    """年を問わず、月次シートを [(西暦下2桁, 月, シート名), ...] で返す。
 
-    戻り値: ({月: [明細行, ...]}, {月: [日次集計行, ...]}, [日報の列名, ...])
+    「25年9月30」のような日付付き補助シートは SHEET_RE に一致しないので自動的に除外される。
+    """
+    out = []
+    for name in wb.sheet_names():
+        m = SHEET_RE.match(norm(name))
+        if m:
+            out.append((int(m.group(1)), int(m.group(2)), name))
+    return sorted(out)
+
+
+def extract_all(path, machine=None):
+    """1ファイルから、入っている全部の年・月を読む
+
+    13年〜25年のように複数年ぶんが1フォルダにある場合でも、
+    ファイルを1回開くだけで全年を取れるようにしてある。
+
+    戻り値: ({年2桁: {月: [明細行, ...]}},
+             {年2桁: {月: [日次集計行, ...]}},
+             [日報の列名, ...])
     """
     wb = read_workbook(path)
     machine = machine or Path(path).stem
     src = Path(path).name
     got, days, cols = OrderedDict(), OrderedDict(), []
-    for month, sheet in month_sheets(wb, year2):
+    for year2, month, sheet in all_month_sheets(wb):
         rows, dd, cc = extract_sheet(wb.sheet_by_name(sheet), machine, src)
-        got.setdefault(month, []).extend(rows)
-        days.setdefault(month, []).extend(dd)
+        got.setdefault(year2, OrderedDict()).setdefault(month, []).extend(rows)
+        days.setdefault(year2, OrderedDict()).setdefault(month, []).extend(dd)
         for n in cc:
             if n not in cols:
                 cols.append(n)
     return got, days, cols
+
+
+def extract_year(path, year2, machine=None):
+    """1ファイルから、その年の全月分を返す
+
+    戻り値: ({月: [明細行, ...]}, {月: [日次集計行, ...]}, [日報の列名, ...])
+    """
+    got, days, cols = extract_all(path, machine)
+    return (got.get(year2, OrderedDict()), days.get(year2, OrderedDict()), cols)
 
 
 # ────────── 統合・並び替え（確定ルール） ──────────

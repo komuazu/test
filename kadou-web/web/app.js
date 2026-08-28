@@ -3,8 +3,9 @@
    記入欄の内容は /api/memo（memo.json）に保存する。元の .xls は読み取りのみ。 */
 'use strict';
 
-var DATA = null, MEMO = {}, DEPTKEY = { '本社営業部': 'hq', '東京営業部': 'tk', '池袋営業部': 'ik' };
-var S = { view: 'year', month: null, dept: '全社', deptC: '全社', monthC: 0,
+var YEARS = null, DATA = null, MEMO = {},
+    DEPTKEY = { '本社営業部': 'hq', '東京営業部': 'tk', '池袋営業部': 'ik' };
+var S = { view: 'year', year: null, month: null, dept: '全社', deptC: '全社', monthC: 0,
           monthR: null, machineR: '全機械', q: '', qc: '', qr: '' };
 var MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
@@ -23,22 +24,62 @@ var el = function (tag, cls, html) {
   return e;
 };
 
-/* ── 起動 ── */
+/* ── 起動 ──
+   years.json（そのフォルダにどの年が入っているか）を読んでから、その年のデータを読む。
+   13年〜25年のように複数年あるフォルダでも、画面上部で年を切り替えられる。 */
 function boot() {
   Promise.all([
-    fetch('data.json?t=' + Date.now()).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
-    fetch('/api/memo').then(function (r) { return r.ok ? r.json() : {}; }).catch(function () { return localMemo(); })
+    fetch('years.json?t=' + Date.now()).then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; }),
+    fetch('/api/memo').then(function (r) { return r.ok ? r.json() : {}; })
+      .catch(function () { return localMemo(); })
   ]).then(function (a) {
-    DATA = a[0];
+    YEARS = a[0];
     MEMO = a[1] || {};
-    if (!DATA) {
+    if (!YEARS || !YEARS.years || !YEARS.years.length) {
+      $('#selYear').innerHTML = '';
       $('#warns').innerHTML = '<div class="warn"><b>データがありません。</b>'
         + '右上の「設定」で稼動日報フォルダを指定し、「保存して読み直す」を押してください。</div>';
       return;
     }
-    S.month = S.monthR = DATA.months[DATA.months.length - 1];
-    render();
+    var want = YEARS.years.some(function (y) { return y.year === S.year; })
+      ? S.year : YEARS.current;
+    renderYearSelect(want);
+    loadYear(want);
   });
+}
+
+/* ヘッダーの年プルダウン（年が1つだけのときは出さない） */
+function renderYearSelect(cur) {
+  var sel = $('#selYear');
+  sel.innerHTML = '';
+  YEARS.years.forEach(function (y) {
+    var o = el('option', null, y.year + '年（' + num(y.records) + '件）');
+    o.value = y.year;
+    if (y.year === cur) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.style.display = YEARS.years.length > 1 ? '' : 'none';
+  sel.onchange = function () { loadYear(+sel.value); };
+}
+
+/* その年のデータを読み込んで描き直す */
+function loadYear(year) {
+  fetch('data_' + year + '.json?t=' + Date.now())
+    .then(function (r) {
+      if (!r.ok) throw new Error(year + '年のデータが読み込めませんでした。');
+      return r.json();
+    })
+    .then(function (d) {
+      DATA = d;
+      S.year = year;
+      S.month = S.monthR = DATA.months[DATA.months.length - 1];
+      S.monthC = 0;
+      render();
+    })
+    .catch(function (e) {
+      $('#warns').innerHTML = '<div class="warn"><b>' + esc(e.message) + '</b></div>';
+    });
 }
 
 function localMemo() { try { return JSON.parse(localStorage.getItem('kadouMemo') || '{}'); } catch (e) { return {}; } }
@@ -57,7 +98,10 @@ function planTsu(r) { var v = parseFloat(String(memoOf(r).tsu).replace(/[^0-9.-]
 function render() {
   $('#ttl').textContent = DATA.year + '年 稼動日報 印刷実績ビューア';
   $('#meta').textContent = '読込 ' + DATA.generated + '　／　'
-    + DATA.files.length + 'ファイル　／　' + num(DATA.records.length) + '件';
+    + DATA.files.length + 'ファイル　／　' + num(DATA.records.length) + '件'
+    + (YEARS && YEARS.years.length > 1
+       ? '　／　このフォルダの年: ' + YEARS.years.map(function (y) { return y.year; }).join('、')
+       : '');
   var w = DATA.warnings || [];
   $('#warns').innerHTML = w.length
     ? '<div class="warn"><b>注意</b><br>' + w.map(esc).join('<br>') + '</div>' : '';
@@ -537,8 +581,13 @@ function renderSrc() {
   });
   h += '</tbody>';
   $('#files').innerHTML = h;
-  $('#srcPath').textContent = '読込元: ' + DATA.source
-    + '　／　読み込みは一時フォルダへコピーして行うため、元のExcelファイルは変更されません。';
+  var srcs = DATA.sources || [DATA.source];
+  var sk = DATA.skipped || [];
+  $('#srcPath').innerHTML = '<b>読込元フォルダ</b><br>　' + srcs.map(esc).join('<br>　')
+    + (sk.length ? '<br><b>このPCに無かったフォルダ（読み飛ばし）</b><br>　'
+        + sk.map(esc).join('<br>　') : '')
+    + '<br>読み込みは一時フォルダへコピーして行うため、元のExcelファイルは変更されません。'
+    + '同じファイルが複数のフォルダにある場合は1つだけ数えます。';
 
   var s = '<thead><tr><th class="c">月</th><th>営業部</th><th class="num">明細行</th><th class="num">統合件数</th>'
     + '<th class="num">明細の通し数</th><th class="num">統合後の通し数</th><th class="c">判定</th></tr></thead><tbody>';
@@ -629,7 +678,10 @@ $('#btnCsvRaw').onclick = csvRaw;
 
 $('#btnSetting').onclick = function () {
   fetch('/api/config').then(function (r) { return r.json(); }).then(function (c) {
-    $('#inSrc').value = c.src; $('#inYear').value = c.year;
+    var list = Array.isArray(c.src) ? c.src.slice() : (c.src ? [c.src] : []);
+    (c.srcAlt || []).forEach(function (x) { if (list.indexOf(x) < 0) list.push(x); });
+    $('#inSrc').value = list.join('\n');
+    $('#inYear').value = c.year || '';
     // U: が割り当てられていないPC向けの予備パスと、実際に読んだフォルダを知らせる
     var alt = (c.srcAlt || []).map(esc).join('<br>　　');
     $('#altNote').innerHTML = (alt
@@ -637,7 +689,8 @@ $('#btnSetting').onclick = function () {
       : '') + (DATA ? '今回読み込んだフォルダ: <b>' + esc(DATA.source) + '</b>' : '');
     $('#dlg').showModal();
   }).catch(function () {
-    $('#inSrc').value = DATA ? DATA.source : ''; $('#inYear').value = DATA ? DATA.year : 2026;
+    $('#inSrc').value = DATA ? DATA.source : '';
+    $('#inYear').value = '';
     $('#dlg').showModal();
   });
 };
@@ -653,6 +706,7 @@ function doRebuild(src, year) {
   }).then(function (r) { return r.json(); }).then(function (j) {
     b.disabled = false; b.textContent = 'データ更新';
     if (!j.ok) { alert('読み込みに失敗しました:\n' + j.error); return; }
+    S.year = null;                       // 年の一覧が変わるので選び直す
     boot();
   }).catch(function (e) {
     b.disabled = false; b.textContent = 'データ更新';
