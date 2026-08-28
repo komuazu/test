@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""抽出・統合まわりの自動テスト（ブラウザ不要）
+"""抽出・統合と設定まわりの自動テスト（ブラウザ不要）
 
     python tests/core_test.py
 
@@ -26,6 +26,54 @@ ok, ng = [], []
 def check(cond, msg):
     (ok if cond else ng).append(msg)
     print(('  OK  ' if cond else '  NG  ') + msg)
+
+
+
+def check_pick():
+    """設定画面の「フォルダを選ぶ」が server と正しくつながっているか
+
+    本物のフォルダ選択ダイアログは人が操作しないと閉じないので、
+    ダイアログを出す部分だけ差し替えて、その前後の受け渡しを確かめる。
+    """
+    import json                                                  # noqa: PLC0415
+    import threading                                             # noqa: PLC0415
+    import urllib.request                                        # noqa: PLC0415
+    from functools import partial                                # noqa: PLC0415
+    from http.server import ThreadingHTTPServer                  # noqa: PLC0415
+
+    picked = 'C:' + chr(92) + '選んだフォルダ'
+    got = []
+    real = server.pick_folder
+    server.Handler.cfg = server.load_config()
+    server.pick_folder = lambda initial=None: (got.append(initial), picked)[1]
+
+    port = server.free_port(8791)
+    srv = ThreadingHTTPServer(('127.0.0.1', port), partial(server.Handler))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def post(body):
+        req = urllib.request.Request('http://127.0.0.1:%d/api/pick' % port,
+                                     data=json.dumps(body).encode('utf-8'),
+                                     headers={'Content-Type': 'application/json'})
+        return json.loads(urllib.request.urlopen(req).read().decode('utf-8'))
+
+    try:
+        r = post({'initial': 'C:' + chr(92) + 'Users'})
+        check(r == {'ok': True, 'path': picked}, '選んだフォルダが画面に返る')
+        check(got == ['C:' + chr(92) + 'Users'], '今の設定を開始位置としてダイアログに渡す')
+
+        server.pick_folder = lambda initial=None: None
+        check(post({}) == {'ok': True, 'path': None}, '選ばずに閉じたら何もしない')
+
+        def boom(initial=None):
+            raise RuntimeError('tkinter なし')
+        server.pick_folder = boom
+        r = post({})
+        check(r['ok'] is False and '直接ご記入' in r['error'],
+              'ダイアログを出せない環境では手入力を案内する')
+    finally:
+        server.pick_folder = real
+        srv.shutdown()
 
 
 def main():
@@ -113,6 +161,9 @@ def main():
                 if st['tsuDetail'] != st['tsuGroups']:
                     bad.append((y, st['m'], st['dept']))
         check(not bad, '全年・全月で統合前後の通し数が一致')
+
+        # ── 「フォルダを選ぶ」の配線（ダイアログは出さずに差し替えて確かめる） ──
+        check_pick()
 
         # ── 元ファイルを変更していないこと ──
         before = sorted((p.name, p.stat().st_size, int(p.stat().st_mtime))

@@ -694,6 +694,26 @@ $('#btnSetting').onclick = function () {
     $('#dlg').showModal();
   });
 };
+$('#btnPick').onclick = function () {
+  // サーバー（このPC）側でフォルダ選択ダイアログを出してもらう
+  var b = $('#btnPick'), label = b.textContent;
+  b.disabled = true; b.textContent = '選んでください…';
+  function back() { b.disabled = false; b.textContent = label; }
+  var lines = $('#inSrc').value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+  fetch('/api/pick', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ initial: lines[0] || '' })
+  }).then(function (r) { return r.json(); }).then(function (k) {
+    back();
+    if (!k.ok) { alert(k.error); return; }
+    if (!k.path) { return; }                       // 選ばずに閉じた
+    if (lines.indexOf(k.path) < 0) { lines.push(k.path); }
+    $('#inSrc').value = lines.join('\n');
+  }).catch(function (e) {
+    back();
+    alert('サーバーに接続できませんでした。起動.bat から開き直してください。\n' + e);
+  });
+};
 $('#dlgCancel').onclick = function () { $('#dlg').close(); };
 $('#dlgOk').onclick = function () { $('#dlg').close(); doRebuild($('#inSrc').value, $('#inYear').value); };
 $('#btnRebuild').onclick = function () { doRebuild(); };

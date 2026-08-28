@@ -133,6 +133,10 @@
   <div class="db">
     <label>稼動日報フォルダ（1行に1つ。実在するフォルダを全部読みます）</label>
     <textarea id="inSrc" rows="4" spellcheck="false"></textarea>
+    <div class="pick">
+      <button type="button" id="btnPick">フォルダを選ぶ…</button>
+      <span class="note">選んだフォルダは上の欄に追記されます。要らない行は消してください。</span>
+    </div>
     <label>対象年（空欄にすると、フォルダに入っている年を全部読み込みます）</label>
     <input id="inYear" type="number" min="2000" max="2100" placeholder="全部">
     <p class="note">エクスプローラーの「パスのコピー」で入る前後の <code>"</code> は付いたままで構いません。<br>

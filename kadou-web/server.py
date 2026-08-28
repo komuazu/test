@@ -100,6 +100,36 @@ def save_memo(memo):
         os.replace(tmp, MEMO)
 
 
+_pick_lock = threading.Lock()
+
+
+def pick_folder(initial=None):
+    """稼動日報フォルダを選ぶダイアログを出し、選ばれたパスを返す
+
+    サーバーはこのPCの上で動いているので、ブラウザの「フォルダを選ぶ」から
+    Windows のフォルダ選択ダイアログを出せる。パスを手で書き写さずに済む。
+    選ばずに閉じたときは None。
+    """
+    import tkinter                                               # noqa: PLC0415
+    from tkinter import filedialog                               # noqa: PLC0415
+
+    start = clean_src(initial or '')
+    while start and not Path(start).is_dir():                    # 上の階層まで戻って開く
+        parent = str(Path(start).parent)
+        start = '' if parent == start else parent
+
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)                            # ブラウザの後ろに隠れないように
+    try:
+        got = filedialog.askdirectory(title='稼動日報フォルダを選んでください',
+                                      initialdir=start or str(Path.home() / 'Desktop'),
+                                      mustexist=True)
+    finally:
+        root.destroy()
+    return str(Path(got)) if got else None                       # 区切りを \ に揃える
+
+
 def src_candidates(cfg):
     """稼動日報フォルダの一覧（実在するものだけが実際に読まれる）"""
     src = cfg.get('src')
@@ -183,6 +213,22 @@ class Handler(SimpleHTTPRequestHandler):
                         memo.pop(k, None)
                 save_memo(memo)
                 return self._json({'ok': True, 'count': len(memo)})
+
+            if self.path.startswith('/api/pick'):
+                # ダイアログは1つずつ（2つ開くと閉じられなくなるため）
+                if not _pick_lock.acquire(blocking=False):
+                    return self._json({'ok': False,
+                                       'error': 'フォルダを選ぶ画面がすでに開いています。'})
+                try:
+                    return self._json({'ok': True,
+                                       'path': pick_folder(self._body().get('initial'))})
+                except Exception as e:                           # noqa: BLE001
+                    traceback.print_exc()
+                    return self._json({'ok': False,
+                                       'error': 'フォルダを選ぶ画面を開けませんでした（%s）。'
+                                                'お手数ですが欄に直接ご記入ください。' % e})
+                finally:
+                    _pick_lock.release()
 
             if self.path.startswith('/api/rebuild'):
                 b = self._body()
