@@ -4,7 +4,8 @@
 'use strict';
 
 var DATA = null, MEMO = {}, DEPTKEY = { '本社営業部': 'hq', '東京営業部': 'tk', '池袋営業部': 'ik' };
-var S = { view: 'year', month: null, dept: '全社', deptC: '全社', q: '', qc: '' };
+var S = { view: 'year', month: null, dept: '全社', deptC: '全社', monthC: 0,
+          monthR: null, machineR: '全機械', q: '', qc: '', qr: '' };
 var MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 var $ = function (s) { return document.querySelector(s); };
@@ -35,7 +36,7 @@ function boot() {
         + '右上の「設定」で稼動日報フォルダを指定し、「保存して読み直す」を押してください。</div>';
       return;
     }
-    S.month = DATA.months[DATA.months.length - 1];
+    S.month = S.monthR = DATA.months[DATA.months.length - 1];
     render();
   });
 }
@@ -60,7 +61,8 @@ function render() {
   var w = DATA.warnings || [];
   $('#warns').innerHTML = w.length
     ? '<div class="warn"><b>注意</b><br>' + w.map(esc).join('<br>') + '</div>' : '';
-  renderYear(); renderMonthControls(); renderMonth(); renderClientControls(); renderClient(); renderSrc();
+  renderYear(); renderMonthControls(); renderMonth();
+  renderClientControls(); renderClient(); renderRawControls(); renderRaw(); renderSrc();
 }
 
 /* 年間サマリー */
@@ -145,16 +147,27 @@ function renderYear() {
 }
 
 /* 月別明細 */
-function renderMonthControls() {
-  var s = $('#selMonth'); s.innerHTML = '';
+/* 月のプルダウンを作る（all=true なら「年間（全月）」を先頭に足す） */
+function fillMonths(sel, cur, all, onchange) {
+  sel.innerHTML = '';
+  if (all) {
+    var a = el('option', null, DATA.year + '年 年間（全月）');
+    a.value = 0;
+    if (!cur) a.selected = true;
+    sel.appendChild(a);
+  }
   MONTHS.forEach(function (m) {
     var n = recs(m, null).length;
     var o = el('option', null, DATA.year + '年 ' + m + '月' + (n ? '（' + n + '件）' : '（データなし）'));
     o.value = m; o.disabled = !n;
-    if (m === S.month) o.selected = true;
-    s.appendChild(o);
+    if (m === cur) o.selected = true;
+    sel.appendChild(o);
   });
-  s.onchange = function () { S.month = +s.value; renderMonth(); };
+  sel.onchange = function () { onchange(+sel.value); };
+}
+
+function renderMonthControls() {
+  fillMonths($('#selMonth'), S.month, false, function (m) { S.month = m; renderMonth(); });
 
   var p = $('#pillDept'); p.innerHTML = '';
   ['全社'].concat(DATA.depts).forEach(function (d) {
@@ -197,7 +210,8 @@ function renderMonth() {
     var tip = '機械: ' + r.machines.join(' / ') + (r.nos.length ? '\n統合した管理番号: ' + r.nos.join(', ') : '');
     h += '<tr data-i="' + r.i + '">'
       + (all ? '<td>' + esc(r.dept.replace('営業部', '')) + '</td>' : '')
-      + '<td title="' + esc(tip) + '">' + (r.nos.length ? '<b>' + esc(r.no) + '</b><span class="badge">枝番'
+      + '<td title="' + esc(tip) + '"><a href="#" class="drill" title="日報の元の行を表示">▶</a> '
+        + (r.nos.length ? '<b>' + esc(r.no) + '</b><span class="badge">枝番'
         + r.nos.length + '</span>' : esc(r.no)) + '</td>'
       + '<td>' + esc(r.client) + '</td>'
       + '<td>' + esc(r.name) + '</td>'
@@ -221,11 +235,52 @@ function renderMonth() {
     + (tot ? (pt / tot * 100).toFixed(1) + '%' : '－') + '</td></tr></tbody>';
   t.innerHTML = h;
 
+  var span = t.querySelector('thead tr').children.length;
+  $$('#detail a.drill').forEach(function (a) {
+    a.onclick = function (e) {
+      e.preventDefault();
+      var tr = a.closest('tr'), nx = tr.nextElementSibling;
+      if (nx && nx.classList.contains('sub')) { nx.remove(); a.textContent = '▶'; return; }
+      var r = DATA.records[+tr.dataset.i];
+      var sub = document.createElement('tr');
+      sub.className = 'sub';
+      sub.innerHTML = '<td colspan="' + span + '"><div class="subwrap">'
+        + '<div class="subttl">' + esc(r.no) + ' の内訳　日報の明細 ' + r.det.length + '行</div>'
+        + detTable(r.det) + '</div></td>';
+      tr.after(sub);
+      a.textContent = '▼';
+    };
+  });
+
   $$('#detail textarea, #detail input').forEach(function (f) {
     autosize(f);
     f.oninput = function () { autosize(f); onEdit(f); };
     f.onchange = function () { onEdit(f, true); };
   });
+}
+
+/* 日報の値の表示。ｺｰﾄﾞや管理番号は数量ではないので桁区切りを付けない */
+function rawVal(col, v) {
+  if (v === undefined || v === null || v === '') return '';
+  if (typeof v !== 'number') return esc(v);
+  return /ｺｰﾄﾞ|コード|管理番号|No|番号/.test(col) ? esc(String(v)) : num(v);
+}
+
+/* 日報の明細行をそのままの列構成で表にする */
+function detTable(dets) {
+  var cols = ['__機械'].concat(DATA.cols).filter(function (c) {
+    return dets.some(function (d) { return d[c] !== undefined && d[c] !== null && d[c] !== ''; });
+  });
+  var h = '<table class="sub"><thead><tr>' + cols.map(function (c) {
+    return '<th>' + esc(c === '__機械' ? '機械' : c) + '</th>';
+  }).join('') + '</tr></thead><tbody>';
+  dets.forEach(function (d) {
+    h += '<tr>' + cols.map(function (c) {
+      return '<td class="' + (typeof d[c] === 'number' ? 'num' : '') + '">'
+        + rawVal(c, d[c]) + '</td>';
+    }).join('') + '</tr>';
+  });
+  return h + '</tbody></table>';
 }
 
 function autosize(f) {
@@ -272,6 +327,7 @@ function flash() {
 
 /* 得意先別 */
 function renderClientControls() {
+  fillMonths($('#selMonthC'), S.monthC, true, function (m) { S.monthC = m; renderClient(); });
   var p = $('#pillDeptC'); p.innerHTML = '';
   ['全社'].concat(DATA.depts).forEach(function (d) {
     var b = el('button', S.deptC === d ? 'on' : '', d);
@@ -290,10 +346,13 @@ function ckey(s) {
 
 function clientRows() {
   var map = {};
-  recs(null, S.deptC).forEach(function (r) {
+  recs(S.monthC || null, S.deptC).forEach(function (r) {
     var k = r.client ? ckey(r.client) : '';
-    var e = map[k] || (map[k] = { name: '（得意先名なし）', tsu: 0, cnt: 0, months: {}, names: {} });
+    var e = map[k] || (map[k] = { name: '（得意先名なし）', tsu: 0, cnt: 0, months: {},
+                                  names: {}, items: [], depts: {} });
     if (r.client) e.names[r.client] = (e.names[r.client] || 0) + 1;
+    e.depts[r.dept] = (e.depts[r.dept] || 0) + r.tsu;
+    e.items.push({ name: r.name, tsu: r.tsu, no: r.no });
     e.tsu += r.tsu; e.cnt++;
     e.months[r.m] = (e.months[r.m] || 0) + r.tsu;
   });
@@ -305,6 +364,9 @@ function clientRows() {
       e.name = ns[0];
       e.alias = ns.length > 1 ? ns : null;
     }
+    e.items.sort(function (a, b) { return b.tsu - a.tsu; });
+    e.dept = Object.keys(e.depts).sort(function (a, b) { return e.depts[b] - e.depts[a]; })
+      .map(function (d) { return d.replace('営業部', ''); }).join('・');
     return e;
   });
   var q = S.qc.trim().toLowerCase();
@@ -315,29 +377,154 @@ function clientRows() {
 
 function renderClient() {
   var rows = clientRows(), tot = rows.reduce(function (s, e) { return s + e.tsu; }, 0);
-  $('#cTitle').innerHTML = DATA.year + '年　' + esc(S.deptC)
-    + ' <small>得意先 ' + rows.length + '社　通し数 ' + num(tot) + '</small>';
+  var one = !!S.monthC;                       // 月を選んでいるか（0 = 年間）
+  $('#cTitle').innerHTML = DATA.year + '年' + (one ? S.monthC + '月' : ' 年間') + '　' + esc(S.deptC)
+    + ' <small>得意先 ' + rows.length + '社　' + rows.reduce(function (s, e) { return s + e.cnt; }, 0)
+    + '件　通し数 ' + num(tot) + '</small>';
   var t = $('#clients');
   if (!rows.length) { t.innerHTML = '<tbody><tr><td class="empty">該当なし</td></tr></tbody>'; return; }
-  var h = '<thead><tr><th class="c">順位</th><th>ｸﾗｲｱﾝﾄ名</th><th class="num">件数</th><th class="num">通し数</th><th class="num">構成比</th>';
-  MONTHS.forEach(function (m) { h += '<th class="num">' + m + '月</th>'; });
+  var h = '<thead><tr><th class="c">順位</th><th>ｸﾗｲｱﾝﾄ名</th>'
+    + (S.deptC === '全社' ? '<th class="c">営業部</th>' : '')
+    + '<th class="num">件数</th><th class="num">通し数</th><th class="num">構成比</th>';
+  if (one) h += '<th>品名（管理番号 / 通し数）</th>';
+  else MONTHS.forEach(function (m) { h += '<th class="num">' + m + '月</th>'; });
   h += '</tr></thead><tbody>';
   rows.forEach(function (e, i) {
     h += '<tr><td class="c">' + (i + 1) + '</td><td' + (e.alias ? ' title="同一とみなした表記: ' + esc(e.alias.join(' / ')) + '"' : '') + '>'
       + esc(e.name) + (e.alias ? '<span class="badge">表記' + e.alias.length + '</span>' : '') + '</td>'
+      + (S.deptC === '全社' ? '<td class="c">' + esc(e.dept) + '</td>' : '')
       + '<td class="num">' + e.cnt + '</td><td class="num"><b>' + num(e.tsu) + '</b></td>'
       + '<td class="num">' + (tot ? (e.tsu / tot * 100).toFixed(1) : '0.0') + '%</td>';
-    MONTHS.forEach(function (m) { h += '<td class="num">' + (e.months[m] ? num(e.months[m]) : '') + '</td>'; });
+    if (one) {
+      h += '<td class="items">' + e.items.map(function (x) {
+        return esc(x.name || '（品名なし）') + ' <small>（' + esc(x.no) + ' / ' + num(x.tsu) + '）</small>';
+      }).join('<br>') + '</td>';
+    } else {
+      MONTHS.forEach(function (m) { h += '<td class="num">' + (e.months[m] ? num(e.months[m]) : '') + '</td>'; });
+    }
     h += '</tr>';
   });
-  h += '<tr class="total"><td></td><td>合計</td><td class="num">'
-    + rows.reduce(function (s, e) { return s + e.cnt; }, 0) + '</td><td class="num">' + num(tot) + '</td><td class="num">100.0%</td>';
-  MONTHS.forEach(function (m) {
+  h += '<tr class="total"><td></td><td>合計</td>' + (S.deptC === '全社' ? '<td></td>' : '')
+    + '<td class="num">' + rows.reduce(function (s, e) { return s + e.cnt; }, 0) + '</td>'
+    + '<td class="num">' + num(tot) + '</td><td class="num">100.0%</td>';
+  if (one) h += '<td></td>';
+  else MONTHS.forEach(function (m) {
     var v = rows.reduce(function (s, e) { return s + (e.months[m] || 0); }, 0);
     h += '<td class="num">' + (v ? num(v) : '') + '</td>';
   });
   h += '</tr></tbody>';
   t.innerHTML = h;
+}
+
+/* 日報明細 ── 日報作成に使った内容をそのまま表示する */
+function rawRows() {
+  var out = [];
+  DATA.records.forEach(function (r) {
+    if (r.m !== S.monthR) return;
+    r.det.forEach(function (d) {
+      if (S.machineR !== '全機械' && d['__機械'] !== S.machineR) return;
+      out.push({ d: d, dept: r.dept, no: r.no });
+    });
+  });
+  var q = S.qr.trim().toLowerCase();
+  if (q) {
+    out = out.filter(function (x) {
+      return Object.keys(x.d).some(function (k) {
+        return String(x.d[k]).toLowerCase().indexOf(q) >= 0;
+      });
+    });
+  }
+  out.sort(function (a, b) {
+    return String(a.d['日付']).localeCompare(String(b.d['日付']))
+      || String(a.d['管理番号']).localeCompare(String(b.d['管理番号']));
+  });
+  return out;
+}
+
+function machines() {
+  var set = {};
+  DATA.records.forEach(function (r) { r.machines.forEach(function (m) { set[m] = 1; }); });
+  return Object.keys(set).sort();
+}
+
+function renderRawControls() {
+  fillMonths($('#selMonthR'), S.monthR, false, function (m) { S.monthR = m; renderRaw(); });
+  var sm = $('#selMachineR'); sm.innerHTML = '';
+  ['全機械'].concat(machines()).forEach(function (m) {
+    var o = el('option', null, m);
+    o.value = m;
+    if (m === S.machineR) o.selected = true;
+    sm.appendChild(o);
+  });
+  sm.onchange = function () { S.machineR = sm.value; renderRaw(); };
+  $('#qr').value = S.qr;
+  $('#qr').oninput = function () { S.qr = this.value; renderRaw(); };
+}
+
+function renderRaw() {
+  var rows = rawRows();
+  var tsu = rows.reduce(function (s, x) { return s + (+x.d['通し枚数'] || 0); }, 0);
+  $('#rTitle').innerHTML = DATA.year + '年' + S.monthR + '月　' + esc(S.machineR)
+    + ' <small>明細 ' + rows.length + '行　通し枚数 ' + num(tsu) + '（統合前の生の行）</small>';
+  var t = $('#raw');
+  if (!rows.length) {
+    t.innerHTML = '<tbody><tr><td class="empty">該当するデータがありません。</td></tr></tbody>';
+  } else {
+    var cols = ['__機械'].concat(DATA.cols).filter(function (c) {
+      return rows.some(function (x) { return x.d[c] !== undefined && x.d[c] !== null && x.d[c] !== ''; });
+    });
+    var h = '<thead><tr><th>営業部</th>' + cols.map(function (c) {
+      return '<th>' + esc(c === '__機械' ? '機械' : c) + '</th>';
+    }).join('') + '</tr></thead><tbody>';
+    rows.forEach(function (x) {
+      h += '<tr><td class="c">' + esc(x.dept.replace('営業部', '')) + '</td>' + cols.map(function (c) {
+        return '<td class="' + (typeof x.d[c] === 'number' ? 'num' : '') + '">'
+          + rawVal(c, x.d[c]) + '</td>';
+      }).join('') + '</tr>';
+    });
+    t.innerHTML = h + '</tbody>';
+  }
+
+  // 日次集計ブロック
+  var dd = (DATA.daily || []).filter(function (x) {
+    return x.m === S.monthR && (S.machineR === '全機械' || x.machine === S.machineR);
+  });
+  var dt = $('#dailyT');
+  if (!dd.length) {
+    dt.innerHTML = '<tbody><tr><td class="empty">この月の日次集計ブロックはありません。</td></tr></tbody>';
+    return;
+  }
+  var keys = [];
+  dd.forEach(function (x) {
+    Object.keys(x.vals).forEach(function (k) {
+      if (k !== '日付' && keys.indexOf(k) < 0) keys.push(k);   // 日付は専用列で出す
+    });
+  });
+  var dh = '<thead><tr><th>機械</th><th>日付</th><th>項目</th>'
+    + keys.map(function (k) { return '<th>' + esc(k) + '</th>'; }).join('') + '</tr></thead><tbody>';
+  dd.forEach(function (x) {
+    dh += '<tr><td>' + esc(x.machine) + '</td><td class="c">'
+      + esc((x.date || '').slice(5).replace('-', '/')) + '</td><td>' + esc(x.label) + '</td>'
+      + keys.map(function (k) {
+        return '<td class="' + (typeof x.vals[k] === 'number' ? 'num' : '') + '">'
+          + rawVal(k, x.vals[k]) + '</td>';
+      }).join('') + '</tr>';
+  });
+  dt.innerHTML = dh + '</tbody>';
+}
+
+function csvRaw() {
+  var rows = rawRows();
+  var cols = ['__機械'].concat(DATA.cols).filter(function (c) {
+    return rows.some(function (x) { return x.d[c] !== undefined && x.d[c] !== null && x.d[c] !== ''; });
+  });
+  var out = [['営業部'].concat(cols.map(function (c) { return c === '__機械' ? '機械' : c; }))];
+  rows.forEach(function (x) {
+    out.push([x.dept].concat(cols.map(function (c) {
+      return x.d[c] === undefined || x.d[c] === null ? '' : x.d[c];
+    })));
+  });
+  csv(out, DATA.year + '年' + S.monthR + '月_日報明細_' + S.machineR + '.csv');
 }
 
 /* 元ファイル・検証 */
@@ -415,11 +602,15 @@ function csvMonth() {
 }
 
 function csvClient() {
-  var rows = [['順位', 'ｸﾗｲｱﾝﾄ名', '件数', '通し数'].concat(MONTHS.map(function (m) { return m + '月'; }))];
-  clientRows().forEach(function (e, i) {
-    rows.push([i + 1, e.name, e.cnt, e.tsu].concat(MONTHS.map(function (m) { return e.months[m] || 0; })));
+  var one = !!S.monthC, rs = clientRows();
+  var rows = [['順位', 'ｸﾗｲｱﾝﾄ名', '営業部', '件数', '通し数'].concat(
+    one ? ['品名（管理番号 / 通し数）'] : MONTHS.map(function (m) { return m + '月'; }))];
+  rs.forEach(function (e, i) {
+    rows.push([i + 1, e.name, e.dept, e.cnt, e.tsu].concat(one
+      ? [e.items.map(function (x) { return (x.name || '') + '（' + x.no + ' / ' + x.tsu + '）'; }).join(' ／ ')]
+      : MONTHS.map(function (m) { return e.months[m] || 0; })));
   });
-  csv(rows, DATA.year + '年_' + S.deptC + '_得意先別.csv');
+  csv(rows, DATA.year + '年' + (one ? S.monthC + '月' : '') + '_' + S.deptC + '_得意先別.csv');
 }
 
 /* 画面切替・その他 */
@@ -434,6 +625,7 @@ $('#btnPrint').onclick = function () { window.print(); };
 $('#btnCsvYear').onclick = csvYear;
 $('#btnCsvMonth').onclick = csvMonth;
 $('#btnCsvClient').onclick = csvClient;
+$('#btnCsvRaw').onclick = csvRaw;
 
 $('#btnSetting').onclick = function () {
   fetch('/api/config').then(function (r) { return r.json(); }).then(function (c) {

@@ -93,6 +93,56 @@ with sync_playwright() as pw:
           '得意先別の合計が年間合計と一致')
     pg.screenshot(path=str(SHOT / '03_得意先別.png'), full_page=True)
 
+    # ── 得意先別: 月を選ぶと その月のクライアント別になる ──
+    pg.select_option('#selMonthC', '1')
+    pg.wait_for_timeout(200)
+    crows = pg.locator('#clients tbody tr:not(.total)')
+    check(crows.count() == 5, '1月の得意先別が5社  → %d社' % crows.count())
+    check('品名（管理番号 / 通し数）' in pg.locator('#clients thead').inner_text(),
+          '月を選ぶと品名・管理番号の内訳が出る')
+    check('94,000' in pg.locator('#clients tbody tr.total').inner_text(),
+          '1月の得意先別合計が 94,000 で月合計と一致')
+    pg.screenshot(path=str(SHOT / '06_得意先別_月別.png'), full_page=True)
+    pg.select_option('#selMonthC', '0')
+
+    # ── 日報明細: 日報作成に使った内容がそのまま出る ──
+    pg.locator('nav.tabs button[data-view=raw]').click()
+    pg.select_option('#selMonthR', '1')
+    pg.wait_for_selector('#raw tbody tr')
+    rr = pg.locator('#raw tbody tr')
+    check(rr.count() == 7, '1月の日報明細が7行（統合前の生の行）  → %d行' % rr.count())
+    rhdr = pg.locator('#raw thead').inner_text()
+    check('通し枚数' in rhdr and '表版数' in rhdr and '裏版数' in rhdr, '日報の列がそのまま出る')
+    check('通し枚数（集計）' in rhdr, '2か所に出る同名列は「（集計）」で区別される')
+    check(pg.locator('#dailyT tbody tr').count() > 0, '日次集計ブロック（有効時間など）も見られる')
+    check('1,110' not in pg.locator('#raw tbody').inner_text()
+          and '1110' in pg.locator('#raw tbody').inner_text(),
+          '営業担当ｺｰﾄﾞに桁区切りが付かない')
+    check(pg.locator('#dailyT thead').inner_text().count('日付') == 1, '日次集計の日付列が重複しない')
+    check('有効時間' in pg.locator('#dailyT tbody').inner_text(), '日次集計の項目名が出る')
+    pg.screenshot(path=str(SHOT / '07_日報明細.png'), full_page=True)
+
+    # 機械での絞り込み
+    pg.select_option('#selMachineR', '新26・A全UV稼動日報')
+    pg.wait_for_timeout(200)
+    check(pg.locator('#raw tbody tr').count() == 4, '機械で絞り込める（A全UVは1月4行）')
+    pg.select_option('#selMachineR', '全機械')
+
+    # ── 月別明細から日報の元の行を開く ──
+    pg.locator('nav.tabs button[data-view=month]').click()
+    pg.select_option('#selMonth', '1')
+    pg.wait_for_selector('#detail tbody tr')
+    tgt = pg.locator('#detail tbody tr', has_text='8632175').first
+    tgt.locator('a.drill').click()
+    pg.wait_for_selector('#detail tr.sub')
+    sub = pg.locator('#detail tr.sub table.sub tbody tr')
+    check(sub.count() == 2, '枝番2件の内訳（日報の元の行）が開く  → %d行' % sub.count())
+    st = pg.locator('#detail tr.sub').inner_text()
+    check('8632175-1-2' in st and '8,000' in st, '内訳に枝番の管理番号と通し枚数が出る')
+    pg.screenshot(path=str(SHOT / '08_内訳ドリルダウン.png'), full_page=True)
+    tgt.locator('a.drill').click()
+    check(pg.locator('#detail tr.sub').count() == 0, 'もう一度押すと閉じる')
+
     # ── 元ファイル・検証 ──
     pg.locator('nav.tabs button[data-view=src]').click()
     pg.wait_for_selector('#files tbody tr')

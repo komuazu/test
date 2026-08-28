@@ -47,6 +47,8 @@ def build(src, year, out):
         raise SystemExit('.xls ファイルが1つも見つかりません: %s' % src)
 
     by_month = OrderedDict()      # 月 → 明細行
+    daily_by_month = OrderedDict()  # 月 → 日次集計行（有効時間・準備合計 など）
+    all_cols = []                 # 日報の見出し列（出てきた順）
     file_info, warnings = [], []
 
     for path in files:
@@ -54,15 +56,20 @@ def build(src, year, out):
             warnings.append('%s は旧形式(.xls)ではないため読み飛ばしました。' % path.name)
             continue
         try:
-            got = extract_year(path, year2)
+            got, days, cols = extract_year(path, year2)
         except Exception as e:                                   # noqa: BLE001
             warnings.append('%s を読めませんでした: %s' % (path.name, e))
             traceback.print_exc(file=sys.stderr)
             continue
+        for n_ in cols:
+            if n_ not in all_cols:
+                all_cols.append(n_)
         n = 0
         for month, rows in got.items():
             by_month.setdefault(month, []).extend(rows)
             n += len(rows)
+        for month, dd in days.items():
+            daily_by_month.setdefault(month, []).extend(dd)
         if not got:
             warnings.append('%s に %d年 の月次シートがありません。' % (path.name, year))
         file_info.append({'name': path.name,
@@ -101,6 +108,10 @@ def build(src, year, out):
                     'nos':     sorted(g['nos']) if len(g['nos']) > 1 else [],
                     'machines': sorted(g['machines']),
                     'multi':   len(set(g['dates'])) > 1,
+                    # 日報の元の明細行（この管理番号の内訳）。空セルは落として軽くする
+                    'det':     [dict([('__機械', mm['machine'])]
+                                     + [(k, v) for k, v in mm['raw'].items() if v not in (None, '')])
+                                for mm in g['members']],
                 })
             # 検証用: 統合の前後で通し数が変わっていないこと
             stats.append({'m': month, 'dept': dept,
@@ -123,6 +134,8 @@ def build(src, year, out):
         'files':     file_info,
         'stats':     stats,
         'warnings':  warnings,
+        'cols':      all_cols,
+        'daily':     [dict(d, m=m) for m in sorted(daily_by_month) for d in daily_by_month[m]],
         'records':   records,
     }
     out = Path(out)

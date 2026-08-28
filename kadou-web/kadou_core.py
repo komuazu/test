@@ -110,6 +110,37 @@ def header_map(sh):
     raise ValueError('見出し行（「日付」「管理番号」を含む行）が見つかりません')
 
 
+def header_all(sh, hr):
+    """見出し行にあるすべての列を [(列番号, 表示名), ...] で返す。
+
+    同じ見出しが2か所に出る場合（本刷ブロックと集計ブロックの「通し枚数」など）は
+    2つめ以降に「（集計）」「（3）」を付けて区別する。日報の内容をそのまま見せるための一覧。
+    """
+    seen, out = {}, []
+    for c in range(sh.ncols):
+        n = norm(sh.cell_value(hr, c))
+        if not n:
+            continue
+        seen[n] = seen.get(n, 0) + 1
+        if seen[n] == 2:
+            n += '（集計）'
+        elif seen[n] > 2:
+            n += '（%d）' % seen[n]
+        out.append((c, n))
+    return out
+
+
+def jsonable(v, is_date=False):
+    """xlrd のセル値を JSON に載せられる形にする"""
+    if v is None:
+        return None
+    if isinstance(v, float):
+        if is_date and v > 40000:
+            return (EPOCH + datetime.timedelta(days=int(v))).isoformat()
+        return int(v) if v == int(v) else round(v, 4)
+    return str(v).strip() or None
+
+
 def month_sheets(wb, year2):
     """その年の月次シートを [(月, シート名), ...] で返す。
 
@@ -124,12 +155,33 @@ def month_sheets(wb, year2):
 
 
 def extract_sheet(sh, machine, src):
-    """1シートから明細行を抽出する"""
+    """1シートから明細行を抽出する。
+
+    集計に使う項目に加えて、日報の見出しにある列を丸ごと raw に持たせる
+    （日報作成に使った内容をアプリ側でそのまま見られるようにするため）。
+    日次集計ブロック（有効時間・準備合計 など）は daily に分けて拾う。
+    """
     hr, M = header_map(sh)
-    out = []
+    cols = header_all(sh, hr)
+    out, daily = [], []
     for r in range(hr + 1, sh.nrows):
         # 日次集計ブロック（有効時間・準備合計・色合わせ・印刷時間・その他・受注件数）は明細ではない
-        if norm(sh.cell_value(r, 27) if sh.ncols > 27 else '') in TIME_LABELS + ('受注件数',):
+        lbl = norm(sh.cell_value(r, 27) if sh.ncols > 27 else '')
+        if lbl in TIME_LABELS + ('受注件数',):
+            dv = cell(sh, r, M['日付'])
+            vals = {}
+            for c, n in cols:
+                v = jsonable(cell(sh, r, c), n == '日付')
+                if v not in (None, ''):
+                    vals[n] = v
+            daily.append({
+                'label':   lbl,
+                'date':    (EPOCH + datetime.timedelta(days=int(dv))).isoformat()
+                           if isinstance(dv, float) and dv > 40000 else None,
+                'machine': machine,
+                'src':     src,
+                'vals':    vals,
+            })
             continue
         d = cell(sh, r, M['日付'])
         if not (isinstance(d, float) and d > 40000):   # 日付シリアルの行だけが明細
@@ -152,20 +204,28 @@ def extract_sheet(sh, machine, src):
             'machine': machine,
             'src':     src,
             'seq':     r,
+            'raw':     dict((n, jsonable(cell(sh, r, c), n == '日付')) for c, n in cols),
         })
-    return out
+    return out, daily, [n for _, n in cols]
 
 
 def extract_year(path, year2, machine=None):
-    """1ファイルから、その年の全月分の明細を {月: [行, ...]} で返す"""
+    """1ファイルから、その年の全月分を返す
+
+    戻り値: ({月: [明細行, ...]}, {月: [日次集計行, ...]}, [日報の列名, ...])
+    """
     wb = read_workbook(path)
     machine = machine or Path(path).stem
     src = Path(path).name
-    got = OrderedDict()
+    got, days, cols = OrderedDict(), OrderedDict(), []
     for month, sheet in month_sheets(wb, year2):
-        rows = extract_sheet(wb.sheet_by_name(sheet), machine, src)
+        rows, dd, cc = extract_sheet(wb.sheet_by_name(sheet), machine, src)
         got.setdefault(month, []).extend(rows)
-    return got
+        days.setdefault(month, []).extend(dd)
+        for n in cc:
+            if n not in cols:
+                cols.append(n)
+    return got, days, cols
 
 
 # ────────── 統合・並び替え（確定ルール） ──────────
@@ -198,7 +258,8 @@ def consolidate(rows):
         # 品名: 初日 → 管理番号 → 品名 の順で最小の行のもの
         first = min(e['members'], key=lambda m: (m['date'], str(m['no']), str(m['name'] or '')))
         e['name'] = first['name']
-        del e['members']
+        # 明細行は残す（画面でこの管理番号の内訳＝日報の元の行を見せるため）
+        e['members'].sort(key=lambda m: (m['date'], str(m['no']), m['seq']))
     return list(g.values())
 
 

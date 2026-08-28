@@ -22,6 +22,7 @@
   <button data-view="year" class="on">年間サマリー</button>
   <button data-view="month">月別明細</button>
   <button data-view="client">得意先別</button>
+  <button data-view="raw">日報明細</button>
   <button data-view="src">元ファイル</button>
 </nav>
 
@@ -77,6 +78,7 @@
   <!-- ── 得意先別 ── -->
   <section class="view" id="v-client">
     <div class="toolbar">
+      <select id="selMonthC"></select>
       <span class="pills" id="pillDeptC"></span>
       <input type="search" id="qc" placeholder="得意先名で絞り込み">
       <span class="grow"></span>
@@ -85,6 +87,29 @@
     <div class="card">
       <h2 id="cTitle"></h2>
       <div class="scroll"><table id="clients"></table></div>
+    </div>
+  </section>
+
+  <!-- ── 日報明細（日報作成に使った内容そのまま） ── -->
+  <section class="view" id="v-raw">
+    <div class="toolbar">
+      <select id="selMonthR"></select>
+      <select id="selMachineR"></select>
+      <input type="search" id="qr" placeholder="管理番号・得意先・品名で絞り込み">
+      <span class="grow"></span>
+      <button class="btn" id="btnCsvRaw">CSVで保存</button>
+    </div>
+    <div class="card">
+      <h2 id="rTitle"></h2>
+      <div class="scroll"><table id="raw"></table></div>
+      <p class="note">稼動日報の見出しにある列をそのまま並べています（統合前の1行1行）。
+        同じ見出しが2か所にある列は、2つめに「（集計）」を付けています。
+        集計に使うのは<b>本刷ブロック（「（集計）」が付かない方）</b>の通し枚数・表版数・裏版数です。</p>
+    </div>
+    <div class="card">
+      <h2 id="dTitle">日次集計ブロック <small>有効時間・準備合計・色合わせ・印刷時間・その他・受注件数</small></h2>
+      <div class="scroll"><table id="dailyT"></table></div>
+      <p class="note">明細ではないため印刷実績の集計からは除外している行です。日報の内容確認用に表示しています。</p>
     </div>
   </section>
 
