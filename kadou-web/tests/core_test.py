@@ -119,8 +119,9 @@ def check_shared():
     from functools import partial                                # noqa: PLC0415
     from http.server import ThreadingHTTPServer                  # noqa: PLC0415
 
-    keep = (server.SHARED, server.PASSWORD)
+    keep = (server.SHARED, server.PASSWORD, server.TRUST_LOCAL)
     server.SHARED, server.PASSWORD = True, 'あいことば'
+    server.TRUST_LOCAL = False        # ほかの端末から来た人として確かめる
     server.SESSIONS.clear()
     server.Handler.cfg = server.load_config()
     port = server.free_port(8795)
@@ -157,9 +158,17 @@ def check_shared():
               '共有のときは「フォルダを選ぶ」を使えない')
         check(post('/api/memo', {}, None)[1]['ok'] is False,
               '合い言葉なしでは記入欄も触れない')
+
+        # サーバーにしているPC自身からは、これまでどおり
+        server.TRUST_LOCAL = True
+        page = urllib.request.urlopen(base + '/').read().decode('utf-8')
+        check('app.js' in page, 'サーバーのPC自身からは合い言葉なしで開ける')
+        check(post('/api/pick', {})[1].get('error', '').find('共有') < 0,
+              'サーバーのPC自身からはフォルダを選べる')
+        server.TRUST_LOCAL = False
     finally:
         srv.shutdown()
-        server.SHARED, server.PASSWORD = keep
+        server.SHARED, server.PASSWORD, server.TRUST_LOCAL = keep
         server.SESSIONS.clear()
 
 

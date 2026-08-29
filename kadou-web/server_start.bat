@@ -43,8 +43,9 @@ if errorlevel 1 (
 
 rem ── ほかの端末からも届くように起動する ────────────────
 echo この画面を閉じると、ほかの端末から見られなくなります。
+echo このPCのブラウザも開きます（このPCからは合い言葉なしで使えます）。
 echo 終了するには Ctrl+C を押してください。
 echo.
-%PY% server.py --host 0.0.0.0 --no-browser %*
+%PY% server.py --host 0.0.0.0 %*
 echo.
 pause

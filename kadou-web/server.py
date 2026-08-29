@@ -97,6 +97,10 @@ def save_config(cfg):
 # 誰でもサーバー上の好きなフォルダを読めてしまわないようにするため。
 SHARED = False
 PASSWORD = ''
+# サーバーにしているPC自身（127.0.0.1）からの操作は、これまでどおり扱う。
+# その画面を開けるのはPCの前にいる人だけなので、合い言葉を求めず、
+# 稼動日報フォルダの変更もできるようにする。テストのときだけ False にする。
+TRUST_LOCAL = True
 SESSIONS = set()
 PWFILE = HERE / 'password.txt'
 
@@ -322,9 +326,17 @@ class Handler(SimpleHTTPRequestHandler):
                 return v
         return ''
 
+    def here(self):
+        """サーバーにしているPC自身から開いているか"""
+        return TRUST_LOCAL and self.client_address[0] in ('127.0.0.1', '::1')
+
+    def guest(self):
+        """ほかの端末から見ている状態か（共有中に外から来た人）"""
+        return SHARED and not self.here()
+
     def allowed(self):
         """共有モードでは、合い言葉を入れた人だけが中を見られる"""
-        return (not SHARED) or (not PASSWORD) or (self.token() in SESSIONS)
+        return (not self.guest()) or (not PASSWORD) or (self.token() in SESSIONS)
 
     def send_login(self, msg=''):
         body = LOGIN_HTML.replace('{msg}', msg).encode('utf-8')
@@ -350,7 +362,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith('/api/memo'):
             return self._json(load_memo())
         if self.path.startswith('/api/config'):
-            return self._json(dict(Handler.cfg, shared=SHARED))
+            return self._json(dict(Handler.cfg, shared=self.guest()))
         # data_<年>.json は10MB前後あるので、縮めて送る（社内LANでも効く）
         name = self.path.split('?')[0].lstrip('/')
         if name.endswith('.json') and 'gzip' in (self.headers.get('Accept-Encoding') or ''):
@@ -408,7 +420,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
 
             if self.path.startswith('/api/pick'):
-                if SHARED:
+                if self.guest():
                     return self._json({'ok': False,
                                        'error': '共有で使っているときは、フォルダを'
                                                 'この画面から選べません。'})
@@ -429,8 +441,8 @@ class Handler(SimpleHTTPRequestHandler):
 
             if self.path.startswith('/api/rebuild'):
                 b = self._body()
-                if SHARED:
-                    # 共有のときは、読むフォルダはサーバーの設定で固定する。
+                if self.guest():
+                    # ほかの端末からは、読むフォルダを変えさせない。
                     # 画面から変えられると、サーバー上の好きなフォルダを
                     # 読めてしまうため。
                     b = {}
