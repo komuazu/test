@@ -13,12 +13,18 @@ def serial(d):
     return (d - EPOCH).days
 
 
-def sheet(wb, title, rows, with_client=True, daily_block=True):
-    """rows: (日, 管理番号, ｸﾗｲｱﾝﾄ名, 品名, ｺｰﾄﾞ, 通し, 表, 裏)"""
+def sheet(wb, title, rows, with_client=True, daily_block=True, daily_dated=True):
+    """rows: (日, 管理番号, ｸﾗｲｱﾝﾄ名, 品名, ｺｰﾄﾞ, 通し, 表, 裏)
+
+    daily_dated=False にすると、日次集計ブロックの行に日付を書かない。
+    本物の稼動日報はこちら（日付欄が空）で、直前の明細行の日付を引き継ぐ経路を
+    通ることになる。
+    """
     ws = wb.add_sheet(title)
     ws.write(0, 0, '稼動日報')
     head = ['日付', '管理番号'] + (['ｸﾗｲｱﾝﾄ名'] if with_client else []) \
-        + ['品名', '営業担当ｺｰﾄﾞ', '通し枚数', '表版数', '裏版数']
+        + ['品名', '営業担当ｺｰﾄﾞ', '通し枚数', '表版数', '裏版数', 'やれ枚数',
+           '出庫枚数']
     for c, h in enumerate(head):
         ws.write(3, c, h)
     # 集計ブロック側にも同名の列を置く（本刷ブロックが優先されることの確認用）
@@ -36,15 +42,27 @@ def sheet(wb, title, rows, with_client=True, daily_block=True):
         ws.write(r, c, code); c += 1
         ws.write(r, c, tsu); c += 1
         ws.write(r, c, f); c += 1
-        ws.write(r, c, b)
+        ws.write(r, c, b); c += 1
+        # やれ枚数（損紙）は通し枚数の 5%
+        ws.write(r, c, tsu // 20); c += 1
+        # 出庫枚数 = 実印刷枚数（通し枚数）＋ 基準印刷予備（通し枚数の 10%）
+        #   予備率 = 10 / 100      = 10.00%
+        #   損紙率 =  5 / 110 ≒ 4.55%
+        ws.write(r, c, tsu + tsu // 10)
         # 集計ブロックにはダミー値（採用されてはいけない）
         ws.write(r, 20, 999999); ws.write(r, 21, 99); ws.write(r, 22, 99)
         r += 1
     if daily_block:
-        # 日次集計ブロック: 27列目にラベル。明細として拾われてはいけない
+        # 日次集計ブロック: 27列目にラベル、そのすぐ右(28列目)に値。
+        # 明細として拾われてはいけない。「有効時間」の値が稼働率の分子になる。
+        HOURS = {'有効時間': 8.0, '準備合計': 1.5, '色合わせ': 1.0,
+                 '印刷時間': 4.0, 'その他': 1.5}
         for lbl in ('有効時間', '準備合計', '色合わせ', '印刷時間', 'その他', '受注件数'):
-            ws.write(r, 0, serial(rows[0][0]))
+            if daily_dated:
+                ws.write(r, 0, serial(rows[0][0]))
             ws.write(r, 27, lbl)
+            if lbl in HOURS:
+                ws.write(r, 28, HOURS[lbl])
             ws.write(r, 5, 123456)
             r += 1
     return ws
@@ -94,9 +112,11 @@ def main(outdir):
         (D(2026, 1, 21), '8700100', 'イプシロン㈱', '会報誌 裏',   1110, 15000, 0, 4),
         (D(2026, 1, 22), '8700200', 'ゼータ',       'チラシ',       3820,  9000, 4, 4),
     ])
+    # 日次集計ブロックに日付を書かない（本物の稼動日報と同じ形）。
+    # 直前の明細行の日付を引き継げているかを確かめるため。
     sheet(wb, '26年3月', [
         (D(2026, 3, 5), '8700300', 'イータ商会', '取扱説明書', 2100, 60000, 2, 2),
-    ])
+    ], daily_dated=False)
     wb.save(str(outdir / '新26・菊全UV稼動日報.xls'))
 
     # ── 3号機: 4〜8月のまとまったデータ（画面確認用） ──

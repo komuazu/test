@@ -25,6 +25,8 @@
   <button data-view="year" class="on">年間サマリー</button>
   <button data-view="month">月別明細</button>
   <button data-view="client">得意先別</button>
+  <button data-view="oper">稼働率</button>
+  <button data-view="waste">損紙・予備</button>
   <button data-view="raw">日報明細</button>
   <button data-view="src">元ファイル</button>
 </nav>
@@ -51,14 +53,6 @@
         入っていない年でも、前年の同じ期間と並べられます。</p>
     </div>
 
-    <div class="card" id="cmpMonthCard">
-      <h2>月別 前年比 <small>部署ごと。上段=前年比／下段=増減（通し数）</small></h2>
-      <div class="toolbar">
-        <button class="btn" id="btnCsvCmpM">この表をExcelで保存</button>
-      </div>
-      <div class="scroll"><table id="cmpMonth"></table></div>
-    </div>
-
     <div class="card">
       <h2>月別 通し数 <small id="chartNote">部署の積み上げ</small></h2>
       <div class="toolbar">
@@ -73,12 +67,14 @@
     </div>
 
     <div class="card">
-      <h2>月別 × 部署別 <small>上段=通し数／下段=件数（管理番号ベース）</small></h2>
+      <h2>月別 × 部署別 <small>部署ごとに 本年／前年／増減／前年比／件数</small></h2>
       <div class="toolbar">
         <button class="btn" id="btnCsvYear">この表をExcelで保存</button>
       </div>
       <div class="scroll"><table id="matrix"></table></div>
-      <p class="note">数字をクリックすると、その月・その部署の明細に移動します。</p>
+      <p class="note">件数は管理番号ベース。前年・増減・前年比は通し数どうしの比較で、前年の稼動日報が
+        入っているときだけ出ます（<b>減っていれば赤、増えていれば太字</b>）。
+        本年のデータがまだ無い月は、前年の数字も出しません。</p>
     </div>
   </section>
 
@@ -116,6 +112,100 @@
     <div class="card">
       <h2 id="cTitle"></h2>
       <div class="scroll"><table id="clients"></table></div>
+    </div>
+  </section>
+
+  <!-- ── 稼働率 ── -->
+  <section class="view" id="v-oper">
+    <div class="card">
+      <h2>機械別 月間稼働率 <small id="operNote"></small></h2>
+      <div class="toolbar">
+        <button class="btn" id="btnCsvOper">この表をExcelで保存</button>
+      </div>
+      <div class="scroll"><table id="operSum"></table></div>
+      <p class="note">稼働率＝<b>有効時間の合計 ÷ 就業可能時間</b>。
+        就業可能時間は<b>1日22時間（昼勤11h＋夜勤11hの2直）× その月の稼働日数</b>で、
+        稼働日は土日・祝日（振替休日と国民の休日を含む）・会社の休業日を除いた日です。
+        会社の休業日は「設定」で足せます。</p>
+    </div>
+
+    <div class="card">
+      <h2>日ごとの稼働率 <small id="operDayNote"></small></h2>
+      <div class="toolbar">
+        <select id="selMonthO"></select>
+        <span class="pills" id="pillOper">
+          <button data-o="rate" class="on">稼働率</button>
+          <button data-o="hours">有効時間</button>
+        </span>
+        <span class="grow"></span>
+        <button class="btn" id="btnCsvOperDay">Excelで保存</button>
+      </div>
+      <div class="scroll"><table id="operDay"></table></div>
+      <p class="note">休みの日（土日・祝日・会社の休業日）は灰色にして、分母から外しています。
+        休みの日に動いていた分も表には出しますが、その日は分母に入れません。</p>
+    </div>
+  </section>
+
+  <!-- ── 損紙率 ── -->
+  <section class="view" id="v-waste">
+    <div class="card">
+      <h2>機械別 月間 損紙率・予備率 <small id="wasteNote"></small></h2>
+      <div class="toolbar">
+        <span class="pills" id="pillWaste">
+          <button data-w="rate" class="on">損紙率</button>
+          <button data-w="spare">予備率</button>
+          <button data-w="yare">やれ枚数</button>
+          <button data-w="out">出庫枚数</button>
+        </span>
+        <span class="grow"></span>
+        <button class="btn" id="btnCsvWaste">この表をExcelで保存</button>
+      </div>
+      <div class="scroll"><table id="wasteSum"></table></div>
+      <p class="note"><b>出庫枚数＝実印刷枚数＋基準印刷予備</b>（倉庫から出した紙）。
+        <b>損紙率＝やれ枚数 ÷ 出庫枚数</b>（出庫からはみ出して使ってしまった紙の割合）。
+        <b>予備率＝基準印刷予備 ÷ 実印刷枚数</b>（本刷に対してどれだけ予備を持ったか）。
+        マスにマウスを乗せると、もとの枚数が全部出ます。
+        出庫枚数の列は<b>2016年以降の日報</b>に入っています。それより前の年はどちらも
+        出せません（やれ枚数は出せます）。</p>
+    </div>
+
+    <div class="card">
+      <h2>日ごとの損紙率・予備率 <small id="wasteDayNote"></small></h2>
+      <div class="toolbar">
+        <select id="selMonthWD"></select>
+        <span class="pills" id="pillWasteDay">
+          <button data-d="rate" class="on">損紙率</button>
+          <button data-d="spare">予備率</button>
+          <button data-d="yare">やれ枚数</button>
+          <button data-d="out">出庫枚数</button>
+        </span>
+        <span class="grow"></span>
+        <button class="btn" id="btnCsvWasteDay">Excelで保存</button>
+      </div>
+      <div class="scroll"><table id="wasteDay"></table></div>
+      <p class="note">選んだ月の全部の日を、日付順・機械順で並べています。
+        刷っていない日は灰色にしています。日報の行に日付が入っていなかった分は
+        「日付不明」の行に出して、月合計と食い違わないようにしています。</p>
+    </div>
+
+    <div class="card">
+      <h2>損紙の多い案件 <small id="wasteRankNote"></small></h2>
+      <div class="toolbar">
+        <select id="selMonthW"></select>
+        <span class="pills" id="pillWasteSort">
+          <button data-s="yare" class="on">やれ枚数の多い順</button>
+          <button data-s="rate">損紙率の高い順</button>
+        </span>
+        <span class="grow"></span>
+        <button class="btn" id="btnCsvWasteRank">Excelで保存</button>
+      </div>
+      <div class="scroll"><table id="wasteRank"></table></div>
+      <p class="note">管理番号ごとに統合した件数で並べています（枝番も統合）。
+        上の表と同じ範囲（<b>出庫枚数の入っている案件</b>）を数えるので、
+        <b>やれ枚数の合計は月合計と一致します</b>。出庫枚数の合計は、損紙のあった案件ぶんだけです。
+        <b>やれ枚数の多い順</b>は減らせる枚数が大きい順、<b>損紙率の高い順</b>は
+        出庫枚数に対して損紙の割合が大きい順です（小ロットが上位に来やすいので、
+        出庫枚数と合わせてご覧ください）。上位100件まで出します。</p>
     </div>
   </section>
 
@@ -170,6 +260,11 @@
     <p class="note">エクスプローラーの「パスのコピー」で入る前後の <code>"</code> は付いたままで構いません。<br>
       「保存して読み直す」を押すと、このフォルダの .xls を読み直します。
       読み込みは一時フォルダへコピーしてから行うため、元のExcelファイルには一切触れません。</p>
+    <label>会社の休業日（1行に1つ。稼働率の分母から外します）</label>
+    <textarea id="inClosed" rows="3" spellcheck="false"
+      placeholder="08-13..15  夏季休業&#10;12-29..01-03  年末年始&#10;2026-10-05  棚卸"></textarea>
+    <p class="note">「08-13」は毎年、「2026-08-13」はその年だけ。「..」で範囲、うしろに覚え書きも書けます。
+      「12-29..01-03」のように年をまたいでも構いません。土日祝は書かなくても外れます。</p>
     <p class="note" id="altNote"></p>
     <p class="note" id="sharedNote" style="display:none">
       このアプリは社内サーバーで共有しています。読み込むフォルダは

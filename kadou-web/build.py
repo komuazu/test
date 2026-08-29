@@ -30,7 +30,8 @@ from collections import OrderedDict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kadou_core import (ALL_DEPTS, DEPTS, OTHER, consolidate,     # noqa: E402
+import koyomi                                                     # noqa: E402
+from kadou_core import (ALL_DEPTS, DEPTS, HOURS_LABEL, OTHER, consolidate,  # noqa: E402
                         extract_all, sort_groups)
 
 HERE = Path(__file__).resolve().parent
@@ -128,6 +129,9 @@ def hint_subdirs(cands):
 
 NEW, OLD = '新', '旧'
 MIN_YEAR = 2013          # これより前の年は読まない（古い試験用の日報が混ざるため）
+SHIFT_HOURS = 22         # 1日あたりの就業可能時間（昼勤11h＋夜勤11hの2直）
+YARE_COL = 'やれ枚数'      # 損紙。日報の本刷ブロックの列名
+OUT_COL = '出庫枚数'       # 実印刷枚数＋基準印刷予備。損紙率の分母
 MAX_DEPTH = 6            # 年フォルダを探しにいく深さ
 
 # 「★新・26年稼動」「26年稼働」「13年稼働」といった年フォルダの名前。
@@ -412,7 +416,145 @@ def prefer_new(part):
     return rows, daily, notes
 
 
-def build_year(year, by_month, daily_by_month, cols, files, src, warnings):
+def short_machine(name):
+    """機械名を短くする（'新26・小森1号機稼動日報' → '小森1号機'）
+
+    ファイル名は年ごとに「新25・」「新26・」と頭が変わるので、年と「稼動日報」を
+    落として、画面の見出しが長くならないようにする。
+
+    「★新・NN年稼動」と「NN年稼働」の両方から読む年（2015年など）では、同じ機械が
+    「新・三菱稼動日報」と「三菱稼動日報」の2つの名前で入ってくる。頭の「新」は
+    年の数字が付かないこともあるので、数字の有無によらず落として1台にまとめる。
+    """
+    s = re.sub(r'稼[働動](?:日報|実績)', '', str(name))
+    s = re.sub(r'^\s*新[・･\-_\s]*(?:(?:20)?\d{2}\s*年?[・･\-_\s]*)?', '', s)
+    s = re.sub(r'^\s*(?:20)?\d{2}\s*年?[・･\-_\s]*', '', s)
+    return s.strip(' 　・･-_') or str(name).strip()
+
+
+def build_oper(year, daily_by_month, closed_lines):
+    """稼働率のもとになるデータを作る
+
+      分母 = SHIFT_HOURS（22時間） × その月の稼働日数
+             稼働日 = 平日 − 祝日（振替休日・国民の休日を含む） − 会社の休業日
+      分子 = 稼動日報の「有効時間」の合計（機械が実際に動いていた時間）
+
+    月の合計はシートの月で数える。日ごとの内訳は、日付がその月に入る行だけを
+    並べる（月をまたぐ行がわずかにあるため、合計と日ごとの和は必ずしも一致
+    しない。画面ではその差を「日付不明」として出す）。
+    """
+    closed = koyomi.parse_closed(closed_lines, year)
+    months, machines = OrderedDict(), set()
+    for month in sorted(daily_by_month):
+        per_day, tot = OrderedDict(), OrderedDict()
+        for d in daily_by_month[month]:
+            if d['label'] != HOURS_LABEL or not d.get('hours'):
+                continue
+            mc = short_machine(d['machine'])
+            machines.add(mc)
+            tot[mc] = tot.get(mc, 0) + d['hours']
+            iso = d.get('date') or ''
+            if iso[:7] == '%d-%02d' % (year, month):
+                day = per_day.setdefault(int(iso[8:10]), OrderedDict())
+                day[mc] = day.get(mc, 0) + d['hours']
+        # 土日は画面側で分かるので、平日の休み（祝日・会社の休業日）だけ持たせる
+        off = dict((str(d), why) for d, why in koyomi.month_days(year, month, closed)
+                   if why and why not in ('土曜', '日曜'))
+        months[str(month)] = {
+            'work': len(koyomi.workdays(year, month, closed)),
+            'off':  off,
+            'tot':  dict((k, round(v, 2)) for k, v in tot.items()),
+            'days': dict((str(d), dict((k, round(v, 2)) for k, v in h.items()))
+                         for d, h in sorted(per_day.items())),
+        }
+    return {'shift': SHIFT_HOURS, 'machines': sorted(machines), 'months': months}
+
+
+def col_of(row, name):
+    """明細行から数値の列を取る（本刷ブロック側）
+
+    見出しが2か所にある列は2つめに「（集計）」が付くので、付かない方が本刷。
+    通し枚数と同じ扱いにそろえてある。
+    """
+    v = row['raw'].get(name)
+    return v if isinstance(v, (int, float)) else 0
+
+
+def bases_with_out(rows):
+    """その月に出庫枚数の入っている管理番号（枝番をまとめた base）
+
+    部署をまたいで同じ管理番号が入力されることがある（2015年6月の 7312579 など）。
+    統合レコードは部署ごとに分かれるので、**部署に関係なく管理番号で**判定しないと、
+    月別の表と案件ランキングで数える範囲がずれる。
+    """
+    return {r['base'] for r in rows if col_of(r, OUT_COL)}
+
+
+def build_waste(year, by_month):
+    """損紙率・予備率のもとになるデータ（機械ごと・月ごと・日ごと）
+
+      出庫枚数 = 実印刷枚数 ＋ 基準印刷予備
+      損紙率   = やれ枚数 ÷ 出庫枚数
+                 （やれ枚数 = 出庫枚数からはみ出して使ってしまった紙）
+      予備率   = 基準印刷予備 ÷ 実印刷枚数
+                 （基準印刷予備 = 出庫枚数 − 実印刷枚数）
+
+    出庫枚数は用紙を出すたびに1行へまとめて入るので、明細行すべてには入って
+    いない。ただしその行にも日付と機械があるので、月別・日別・機械別に足せる。
+    2015年より前の日報には出庫枚数の列が無く、その年は損紙率も予備率も出せない。
+
+    実印刷枚数は「出庫枚数の入っている行の通し枚数」を使う。出庫が入らない行
+    （同じ紙の2回目以降の刷り）まで足すと、基準印刷予備が合わなくなるため。
+    実データでは 出庫枚数 = 通し枚数 + ＪＰ予備紙 が97.3%の行で成り立つ。
+
+    数える範囲は「出庫枚数の入っている案件（管理番号）」だけにそろえる。やれ枚数
+    だけ数えて出庫枚数を数えないと、率が跳ね上がってしまうため（出庫枚数がほとんど
+    無い2014年で 66429% になっていた）。どれだけの案件を数えられたかは cover に
+    入れて、画面で少なすぎるときに知らせる。
+
+    1マスに [出庫枚数, やれ枚数, 通し枚数, 実印刷枚数] を入れる。月ごとの合計
+    (tot)と、日ごとの内訳(days)を持たせる。日ごとは明細行の日付で振り分ける
+    （月をまたぐ行はその月の合計にだけ入るので、画面では差を「日付不明」に出す）。
+    """
+    months, machines = OrderedDict(), set()
+    njob = njob_out = 0
+    for month in sorted(by_month):
+        # その月に出庫枚数のある案件（管理番号）を先に拾う
+        with_out = bases_with_out(by_month[month])
+        jobs = {r['base'] for r in by_month[month]}
+        njob += len(jobs)
+        njob_out += len(with_out)
+
+        per, days = OrderedDict(), OrderedDict()
+        for r in by_month[month]:
+            mc = short_machine(r['machine'])
+            machines.add(mc)
+            if r['base'] not in with_out:
+                continue                    # 出庫枚数の無い案件は数えない
+            out = col_of(r, OUT_COL)
+            v = [out, col_of(r, YARE_COL), r['tsu'] or 0,
+                 (r['tsu'] or 0) if out else 0]
+            e = per.setdefault(mc, [0] * len(v))
+            for i, x in enumerate(v):
+                e[i] += x
+            d = r['date']
+            if d and d.year == year and d.month == month:
+                day = days.setdefault(str(d.day), OrderedDict())
+                e2 = day.setdefault(mc, [0] * len(v))
+                for i, x in enumerate(v):
+                    e2[i] += x
+        cast = lambda h: dict((k, [int(x) for x in v]) for k, v in h.items())  # noqa: E731
+        months[str(month)] = {
+            'tot':  cast(per),
+            'days': dict((dd, cast(h))
+                         for dd, h in sorted(days.items(), key=lambda x: int(x[0]))),
+        }
+    return {'machines': sorted(machines), 'months': months,
+            'cover': round(njob_out / njob, 4) if njob else 0}
+
+
+def build_year(year, by_month, daily_by_month, cols, files, src, warnings,
+               closed=None):
     """1年ぶんのデータを組み立てる（統合ルールは kadou-report と同じ）"""
     records, stats = [], []
     # 「その他」に入った営業担当ｺｰﾄﾞ（画面の見出しに出す）
@@ -421,6 +563,8 @@ def build_year(year, by_month, daily_by_month, cols, files, src, warnings):
     for month in sorted(by_month):
         rows = by_month[month]
         rows.sort(key=lambda x: (x['date'], str(x['no']), x['seq']))
+        # 損紙率の数える範囲（build_waste と同じ判定。部署をまたいでも同じ結果）
+        month_out = bases_with_out(rows)
         for dept in ALL_DEPTS:
             drows = [r for r in rows if r['dept'] == dept]
             groups = sort_groups(consolidate(drows))
@@ -437,6 +581,14 @@ def build_year(year, by_month, daily_by_month, cols, files, src, warnings):
                     'date':    min(g['dates']).isoformat(),
                     'color':   '%d/%d' % (g['f'], g['b']),
                     'tsu':     int(g['tsu']),
+                    'yare':    int(sum(col_of(mm, YARE_COL) for mm in g['members'])),
+                    'out':     int(sum(col_of(mm, OUT_COL) for mm in g['members'])),
+                    # 実印刷枚数（出庫枚数が入っている行の通し枚数）
+                    'prn':     int(sum(mm['tsu'] or 0 for mm in g['members']
+                                       if col_of(mm, OUT_COL))),
+                    # この管理番号に出庫枚数があるか（部署をまたいで見る）。
+                    # 損紙率で数える範囲を、機械別の表とそろえるための目印
+                    'ob':      1 if g['base'] in month_out else 0,
                     'rows':    g['n'],
                     'nos':     sorted(g['nos']) if len(g['nos']) > 1 else [],
                     'machines': sorted(g['machines']),
@@ -477,11 +629,13 @@ def build_year(year, by_month, daily_by_month, cols, files, src, warnings):
         'warnings':  warns,
         'cols':      cols,
         'daily':     [dict(d, m=m) for m in sorted(daily_by_month) for d in daily_by_month[m]],
+        'oper':      build_oper(year, daily_by_month, closed),
+        'waste':     build_waste(year, by_month),
         'records':   records,
     }
 
 
-def build(src, year=None, outdir=None):
+def build(src, year=None, outdir=None, closed=None):
     """フォルダを読み、年ごとの data_YYYY.json と years.json を書き出す"""
     srcs, cands = resolve_src(src)
     if not srcs:
@@ -522,7 +676,8 @@ def build(src, year=None, outdir=None):
     source = ' ／ '.join(str(x) for x in srcs)
     summary = []
     for y in years:
-        data = build_year(y, rows[y], daily.get(y, {}), cols, files, source, warnings)
+        data = build_year(y, rows[y], daily.get(y, {}), cols, files, source, warnings,
+                          closed)
         data['sources'] = [str(x) for x in srcs]
         data['skipped'] = skipped
         (outdir / ('data_%d.json' % y)).write_text(
@@ -574,6 +729,8 @@ def main():
                    help='稼動日報フォルダ（複数指定可: --src A --src B）')
     p.add_argument('--year', type=int, help='対象年（省略すると入っている年を全部）')
     p.add_argument('--out', default=str(WEB), help='出力先フォルダ（既定 web）')
+    p.add_argument('--closed', action='append',
+                   help='会社の休業日（--closed 08-13..15 のように複数指定可）')
     a = p.parse_args()
 
     print('対象フォルダ:')
@@ -587,7 +744,7 @@ def main():
                   + ('\n      → %s として読み込みます' % hit if hit is not None
                      else '  （見つかりません）'))
     print('対象年      : %s' % ('%d年' % a.year if a.year else 'フォルダ内の全部'))
-    m = build(a.src, a.year, a.out)
+    m = build(a.src, a.year, a.out, a.closed)
 
     print('\n── 集計結果 ' + '─' * 56)
     print('%-8s %8s %8s %14s   %s' % ('年', '明細行', '統合件数', '通し数', '月'))

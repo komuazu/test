@@ -77,6 +77,37 @@ tr.total td,tr.total th{background:#eeeeea !important; font-weight:700; border-t
 tr.diff  td{background:#f6e9e3 !important; font-weight:700}
 .badge{display:inline-block; background:var(--navy); color:#fff; padding:0 5px; font-size:10px; margin-left:5px; cursor:help}
 
+/* 月別 × 部署別（部署ごとに 通し数／件数／前年比／増減 の4段） */
+#matrix tbody td{background:#fff}                     /* 1行おきの色分けはやめる */
+#matrix tbody + tbody > tr:first-child > *{border-top:2px solid var(--line)}
+#matrix tbody tr:hover td{background:var(--navy-x)}   /* 見ている段を1本の帯にする */
+#matrix th.rh{vertical-align:middle; background:var(--th)}
+#matrix th.rh small{display:block; margin:1px 0 0; font-size:10.5px; line-height:1.35}
+#matrix th.kh{
+  background:#f4f5f6; color:var(--sub); font-weight:400; text-align:left;
+  white-space:nowrap; font-size:11.5px;
+}
+#matrix td.yr{background:#f7f8f9; font-weight:700}    /* 年間合計の列 */
+#matrix tbody tr.k-tsu td,#matrix tbody tr.k-tsu th.kh{font-weight:700}  /* 本年の段 */
+#matrix tbody.total td,#matrix tbody.total th{background:#eeeeea; font-weight:700}
+#matrix tbody.total th.kh{color:var(--ink)}
+#matrix tbody.total td.yr{background:#e5e5e0}
+
+/* 稼働率 */
+#operSum tr.sub2 td,#operSum tr.sub2 th{background:#f4f5f6; color:var(--sub)}
+#operSum th.rh,#operDay th.rh{white-space:nowrap}
+#operDay tr.off td{background:#f4f4f2; color:var(--sub)}
+#operDay td.sat{color:#2b5aa0}
+#operDay td.sun{color:var(--bad)}
+#operDay tr.total td{background:#eeeeea !important}
+#operSum td.yr,#operDay td.yr{font-weight:700}
+
+/* 損紙率 */
+#wasteSum th.rh{white-space:nowrap}
+#wasteSum td.yr{font-weight:700}
+#wasteRank td:nth-child(4){max-width:26em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+#wasteRank tr.total td{background:#eeeeea !important}
+
 /* 年間 集計（先頭の表） */
 #sum{width:auto; min-width:520px}
 #sum td,#sum th{padding:5px 14px}
@@ -103,6 +134,7 @@ svg.chart .tick{fill:var(--sub); font-size:11px}
 svg.chart .tick2{fill:#c0504d; font-size:10.5px}
 svg.chart .lab{fill:var(--ink); font-size:11.5px}
 svg.chart .val{fill:var(--sub); font-size:10px}
+svg.chart .ylab{fill:var(--sub); font-size:10px}   /* 棒の下の年 */
 svg.chart .atitle{fill:var(--sub); font-size:11.5px}
 svg.chart .col{stroke:none}
 svg.chart .conn{stroke:#9aa1a8; stroke-width:1}
@@ -170,6 +202,12 @@ dialog .df button.pri{background:var(--navy); color:#fff; border-color:var(--nav
   table{font-size:8.5pt}
   thead{display:table-header-group}       /* ページをまたぐとき見出しを繰り返す */
   tr{break-inside:avoid; page-break-inside:avoid}
+  #matrix tbody{break-inside:avoid; page-break-inside:avoid}
+  /* 段や行が多い表は、印刷では詰めてA4横1枚に収める */
+  #matrix th,#matrix td,#operDay th,#operDay td,
+  #wasteRank th,#wasteRank td{padding:1px 5px; line-height:1.35}
+  /* 稼働率は「機械別の年間」と「日ごと」を別々の紙に出す */
+  #v-oper .card + .card{break-before:page; page-break-before:always}
   thead th{position:static}
   .scroll{overflow:visible}
   svg.chart{width:100%; height:auto}

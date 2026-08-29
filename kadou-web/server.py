@@ -54,6 +54,11 @@ DEFAULT_CONFIG = {
     ],
     'year': None,        # None = 見つかった年を全部読む
     'port': 8765,
+    # 稼働率の分母から外す会社の休業日（お盆・年末年始など）。1行に1つ。
+    #   2026-08-13 ／ 08-13（毎年） ／ 08-13..15（範囲）
+    #   12-29..01-03（年をまたぐ範囲）／ 後ろに覚え書き可
+    # 土日祝は書かなくても自動で外れる。
+    'closed': [],
 }
 
 
@@ -246,7 +251,8 @@ def rebuild(cfg):
     sys.path.insert(0, str(HERE))
     import build                                                 # noqa: PLC0415
     year = cfg.get('year')
-    return build.build(src_candidates(cfg), int(year) if year else None, WEB)
+    return build.build(src_candidates(cfg), int(year) if year else None, WEB,
+                       cfg.get('closed'))
 
 
 LOGIN_HTML = """<!doctype html><html lang="ja"><head><meta charset="utf-8">
@@ -458,6 +464,12 @@ class Handler(SimpleHTTPRequestHandler):
                     if v:
                         Handler.cfg['src'] = v
                         Handler.cfg.pop('srcAlt', None)
+                # 会社の休業日（空欄可）。画面からは1行1日で来る
+                if 'closed' in b:
+                    v = b['closed']
+                    if isinstance(v, str):
+                        v = [x.strip() for x in v.splitlines() if x.strip()]
+                    Handler.cfg['closed'] = list(v or [])
                 # 年は空欄可（空 = フォルダに入っている年を全部）
                 if 'year' in b:
                     Handler.cfg['year'] = int(b['year']) if str(b['year']).strip() else None

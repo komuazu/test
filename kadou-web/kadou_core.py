@@ -31,6 +31,8 @@ ALL_DEPTS = list(DEPTS) + [OTHER]     # 画面と集計に出す並び順
 NEED = ('日付', '管理番号', '営業担当ｺｰﾄﾞ', '品名', '通し枚数', '表版数', '裏版数')
 OPTIONAL = ('ｸﾗｲｱﾝﾄ名',)
 TIME_LABELS = ('有効時間', '準備合計', '色合わせ', '印刷時間', 'その他')
+DAILY_LABELS = TIME_LABELS + ('受注件数',)
+HOURS_LABEL = '有効時間'          # 稼働率の分子に使う（機械が動いていた時間）
 EPOCH = datetime.date(1899, 12, 30)
 
 SHEET_RE = re.compile(r'^(?:20)?(\d{2})\s*[年月]\s*(\d{1,2})\s*月$')
@@ -157,6 +159,21 @@ def month_sheets(wb, year2):
     return sorted(out)
 
 
+def daily_label(sh, r):
+    """日次集計ブロックの行なら (ラベル, すぐ右の数値) を返す
+
+    ラベルの列は年によって 9・27・28・30・31 列目とまちまちなので、列を決め打ち
+    せずに行の中から探す。値はどの年でも必ずラベルのすぐ右に入っている。
+    「有効時間」の値がそのまま稼働率の分子（時間・小数）になる。
+    """
+    for c in range(sh.ncols):
+        v = sh.cell_value(r, c)
+        if isinstance(v, str) and norm(v) in DAILY_LABELS:
+            nxt = sh.cell_value(r, c + 1) if c + 1 < sh.ncols else None
+            return norm(v), (nxt if isinstance(nxt, float) else None)
+    return None, None
+
+
 def extract_sheet(sh, machine, src):
     """1シートから明細行を抽出する。
 
@@ -167,39 +184,45 @@ def extract_sheet(sh, machine, src):
     hr, M = header_map(sh)
     cols = header_all(sh, hr)
     out, daily = [], []
+    last_day = None                # 直前に出てきた明細行の日付
     for r in range(hr + 1, sh.nrows):
-        # 日次集計ブロック（有効時間・準備合計・色合わせ・印刷時間・その他・受注件数）は明細ではない
-        lbl = norm(sh.cell_value(r, 27) if sh.ncols > 27 else '')
-        if lbl in TIME_LABELS + ('受注件数',):
-            dv = cell(sh, r, M['日付'])
-            vals = {}
-            for c, n in cols:
-                v = jsonable(cell(sh, r, c), n == '日付')
-                if v not in (None, ''):
-                    vals[n] = v
-            daily.append({
-                'label':   lbl,
-                'date':    (EPOCH + datetime.timedelta(days=int(dv))).isoformat()
-                           if isinstance(dv, float) and dv > 40000 else None,
-                'machine': machine,
-                'src':     src,
-                'vals':    vals,
-            })
-            continue
         d = cell(sh, r, M['日付'])
-        if not (isinstance(d, float) and d > 40000):   # 日付シリアルの行だけが明細
-            continue
+        day = (EPOCH + datetime.timedelta(days=int(d))
+               if isinstance(d, float) and d > 40000 else None)
         code = cell(sh, r, M['営業担当ｺｰﾄﾞ'])
         code = int(code) if isinstance(code, float) else code
-        if not isinstance(code, int):
-            continue                           # 担当ｺｰﾄﾞが数字でない行は明細ではない
+
+        # 明細行（日付シリアルと数字の担当ｺｰﾄﾞが揃っている行）かどうかを先に見る。
+        # 「その他」のように日次集計ブロックのラベルと同じ言葉が用紙銘柄などに
+        # 入っていても、明細を取りこぼさないようにするため。
+        if not (day and isinstance(code, int)):
+            # 日次集計ブロック（有効時間・準備合計・色合わせ・印刷時間・その他・受注件数）
+            lbl, hours = daily_label(sh, r)
+            if lbl:
+                vals = {}
+                for c, n in cols:
+                    v = jsonable(cell(sh, r, c), n == '日付')
+                    if v not in (None, ''):
+                        vals[n] = v
+                daily.append({
+                    'label':   lbl,
+                    # ブロックの行には日付が入っていない。その日の明細のすぐ下に
+                    # 置かれているので、直前の明細行の日付を引き継ぐ
+                    'date':    (day or last_day).isoformat() if (day or last_day) else None,
+                    'hours':   hours,
+                    'machine': machine,
+                    'src':     src,
+                    'vals':    vals,
+                })
+            continue
+        last_day = day
         out.append({
             # 3営業部のコード以外は「その他」にまとめる（落とさずに数える）
             'dept':    CODE2DEPT.get(code, OTHER),
             'code':    code,
             'no':      cell(sh, r, M['管理番号']),
             'base':    basno(cell(sh, r, M['管理番号'])),
-            'date':    EPOCH + datetime.timedelta(days=int(d)),
+            'date':    day,
             'client':  cell(sh, r, M['ｸﾗｲｱﾝﾄ名']),
             'name':    cell(sh, r, M['品名']),
             'f':       cell(sh, r, M['表版数']) or 0,

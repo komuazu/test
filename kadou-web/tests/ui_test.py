@@ -52,10 +52,6 @@ with sync_playwright() as pw:
           '前年・増減・前年比の列がある')
     check('2025年' in pg.locator('#cmpNote').inner_text(),
           '比べている年が見出しに出る  → ' + pg.locator('#cmpNote').inner_text())
-    check(pg.locator('#cmpMonth tbody tr').count() == 6, '月別前年比が5部署+合計行')
-    tip = pg.locator('#cmpMonth tbody tr.total td').first.get_attribute('title')
-    check('今年' in tip and '前年' in tip,
-          '月別前年比のマスに今年と前年の数字が出る  → ' + tip)
 
     # ── グラフを前年比較に切り替える ──
     pg.locator('#pillChart button[data-c=yoy]').click()
@@ -71,6 +67,9 @@ with sync_playwright() as pw:
     check(pg.locator('#chart polyline.rate').count() == 0
           and pg.locator('#chart text.tick2').count() == 0,
           '前年比較のグラフにも折れ線を出さない')
+    yl = pg.locator('#chart text.ylab').all_text_contents()
+    check(yl[:2] == ['26年', '25年'] and len(yl) == ms * 2,
+          '棒の下に年が出る（%d月ぶん×2本）  → %s' % (ms, yl[:4]))
     lg = pg.locator('#legend').inner_text().replace('\n', ' ')
     check('2026' in lg and '2025' in lg and '斜線' in lg,
           '凡例に今年（塗り）と前年（斜線）が出る  → ' + lg)
@@ -86,9 +85,17 @@ with sync_playwright() as pw:
     pg.wait_for_timeout(300)
     check(pg.locator('#chart rect.col').count() > 0
           and pg.locator('#chart line.conn').count() > 0, '積み上げに戻せる')
-    check(pg.locator('#matrix tbody tr').count() == 6, 'マトリクスが5部署+合計行')
-    total = pg.locator('#matrix tbody tr.total td').last.inner_text()
+    check(pg.locator('#matrix tbody').count() == 6, 'マトリクスが5部署+合計のかたまり')
+    kinds = pg.locator('#matrix tbody').first.locator('th.kh').all_inner_texts()
+    check(kinds == ['本年（通し数）', '前年', '増減', '前年比', '件数'],
+          '1部署が本年・前年・増減・前年比・件数の5段  → %s' % kinds)
+    total = pg.locator('#matrix tbody.total tr').first.locator('td.yr').inner_text()
     check('1,874,777' in total, '年間合計 1,874,777 通し  → ' + total.replace('\n', ' '))
+    pre = pg.locator('#matrix tbody.total tr').nth(1).locator('td').first.inner_text()
+    check(pre == '95,000', '前年の実数が行として出る（合計 1月）  → ' + pre)
+    tip = pg.locator('#matrix tbody.total tr').nth(3).locator('td').first.get_attribute('title')
+    check('本年' in tip and '前年' in tip,
+          '前年比のマスに本年と前年の数字が出る  → ' + tip)
     pg.screenshot(path=str(SHOT / '01_年間サマリー.png'), full_page=True)
 
     # ── 印刷とPDF ──
@@ -112,10 +119,12 @@ with sync_playwright() as pw:
     check(got.suggested_filename.endswith('.xlsx'),
           'Excelファイルとして保存できる  → ' + got.suggested_filename)
 
-    # ── マトリクスの数字から月別明細へジャンプ ──
-    pg.locator('#matrix a.jump').first.click()
+    check(pg.locator('#matrix a').count() == 0, 'マトリクスの数字はリンクにしない')
+
+    # ── 月別明細へ ──
+    pg.locator('nav.tabs button[data-view=month]').click()
     pg.wait_for_selector('#detail tbody tr')
-    check(pg.locator('section#v-month.on').count() == 1, 'マトリクスのリンクで月別明細へ移動')
+    check(pg.locator('section#v-month.on').count() == 1, 'タブで月別明細へ移動')
 
     # ── 1月・全社 ──
     pg.select_option('#selMonth', '1')
@@ -204,6 +213,142 @@ with sync_playwright() as pw:
     pg.screenshot(path=str(SHOT / '06_得意先別_月別.png'), full_page=True)
     pg.select_option('#selMonthC', '0')
 
+    # ── 稼働率（有効時間 ÷ 22時間×稼働日数） ──
+    pg.locator('nav.tabs button[data-view=oper]').click()
+    pg.wait_for_selector('#operSum tbody tr')
+    head = pg.locator('#operSum thead').inner_text()
+    check('1月' in head and '年間' in head, '機械別 月間稼働率に月と年間の列がある')
+    names = pg.locator('#operSum tbody th.rh').all_text_contents()
+    check(names == ['稼働日数', 'A全UV', '小森1号機', '菊全UV', '全機械'],
+          '稼働日数の行と機械の行が出る  → %s' % names)
+    work = pg.locator('#operSum tbody tr').first.locator('td').all_text_contents()
+    # 2026年: 1月は元日と成人の日、8月は山の日が休み（土日も除く）
+    check(work[0] == '20日' and work[1] == '18日' and work[7] == '20日',
+          '祝日と土日を除いた稼働日数が出る（1月20日・2月18日・8月20日）  → %s' % work[:8])
+
+    pg.select_option('#selMonthO', '8')
+    pg.wait_for_timeout(200)
+    check('稼働 20日 × 22時間 = 440時間' in pg.locator('#operDayNote').inner_text(),
+          '分母の内訳が出る  → ' + pg.locator('#operDayNote').inner_text())
+    days = pg.locator('#operDay tbody tr')
+    check(days.count() == 32, '8月は31日ぶん＋月合計の32行  → %d行' % days.count())
+    check(days.nth(10).inner_text().find('山の日') >= 0,
+          '祝日は名前で出る（8/11 山の日）')
+    off = pg.locator('#operDay tbody tr.off').count()
+    check(off == 11, '土日と祝日は灰色にする（8月は10日＋山の日）  → %d日' % off)
+    # ダミー日報は 8/9(日) に 8.0h 入れてある。休みの日でも表には出すが分母には入れない
+    check('36.4%' in days.nth(8).inner_text(),
+          '休みの日に動いた分も出す（8.0h ÷ 22h = 36.4%）')
+    check('1.8%' in pg.locator('#operDay tbody tr.total').inner_text(),
+          '月合計は 8.0h ÷ 440h = 1.8%')
+    pg.locator('#pillOper button[data-o=hours]').click()
+    pg.wait_for_timeout(200)
+    check('8.00h' in days.nth(8).inner_text(), '有効時間に切り替えられる')
+    pg.locator('#pillOper button[data-o=rate]').click()
+    pg.screenshot(path=str(SHOT / '10_稼働率.png'), full_page=True)
+    with pg.expect_download(timeout=30000) as dl:
+        pg.locator('#btnCsvOper').click()
+    check(dl.value.suggested_filename.endswith('.xlsx'),
+          '稼働率をExcelで保存できる  → ' + dl.value.suggested_filename)
+    with pg.expect_download(timeout=30000) as dl2:
+        pg.locator('#btnCsvOperDay').click()
+    check(dl2.value.suggested_filename.endswith('.xlsx'),
+          '日ごとの稼働率をExcelで保存できる  → ' + dl2.value.suggested_filename)
+
+    # ── 損紙率・予備率 ──
+    #   ダミー日報は  実印刷 = 通し枚数 ／ 基準予備 = 通しの10% ／ やれ = 通しの5%
+    #   → 出庫 = 通し×1.1、損紙率 = 5/110 = 4.55%、予備率 = 10/100 = 10.00%
+    pg.locator('nav.tabs button[data-view=waste]').click()
+    pg.wait_for_selector('#wasteSum tbody tr')
+    names = pg.locator('#wasteSum tbody th.rh').all_text_contents()
+    check(names == ['A全UV', '小森1号機', '菊全UV', '全機械'],
+          '機械の行と全機械の行が出る  → %s' % names)
+    tot = pg.locator('#wasteSum tbody tr.total td').all_text_contents()
+    check(all(x == '4.55%' for x in tot),
+          'どの月も 損紙率 5/110 = 4.55%%  → %s' % tot[:4])
+    note = pg.locator('#wasteNote').inner_text()
+    check('4.55%' in note and '18.85%' not in note and '10.00%' in note,
+          '見出しに年間の損紙率と予備率が出る  → ' + note)
+    tip = pg.locator('#wasteSum tbody tr.total td').first.get_attribute('title')
+    check(all(k in tip for k in ('出庫', '実印刷', '基準予備', 'やれ', '通し')),
+          'マスにもとの枚数が全部出る  → ' + tip)
+    pg.locator('#pillWaste button[data-w=spare]').click()
+    pg.wait_for_timeout(200)
+    check(pg.locator('#wasteSum tbody tr.total td').first.inner_text() == '10.00%',
+          '予備率に切り替えられる（基準予備 ÷ 実印刷 = 10.00%）')
+    pg.locator('#pillWaste button[data-w=out]').click()
+    pg.wait_for_timeout(200)
+    check(pg.locator('#wasteSum tbody tr.total td').first.inner_text() == '188,954',
+          '出庫枚数に切り替えられる（1月 188,954枚）')
+    pg.locator('#pillWaste button[data-w=yare]').click()
+    pg.wait_for_timeout(200)
+    check(pg.locator('#wasteSum tbody tr.total td').first.inner_text() == '8,588',
+          'やれ枚数に切り替えられる（1月 8,588枚）')
+    pg.locator('#pillWaste button[data-w=rate]').click()
+
+    # 日ごとの損紙率（日付順・機械順）
+    pg.select_option('#selMonthWD', '1')
+    pg.wait_for_timeout(200)
+    wd = pg.locator('#wasteDay tbody tr')
+    check(wd.count() == 32, '1月は31日ぶん＋月合計の32行  → %d行' % wd.count())
+    dh = pg.locator('#wasteDay thead').inner_text()
+    check('A全UV' in dh and '小森1号機' in dh and '全機械' in dh,
+          '機械が列に並ぶ  → ' + dh.replace('\n', ' '))
+    # ダミー日報は 1/6 に A全UV で 出庫46,200・やれ2,100 = 4.55%
+    check(wd.nth(5).locator('td').nth(2).inner_text() == '4.55%',
+          '1月6日 A全UV が 4.55%')
+    check(wd.nth(3).locator('td').nth(2).inner_text() == '－'
+          and 'off' in (wd.nth(3).get_attribute('class') or ''),
+          '刷っていない日は灰色にして「－」にする')
+    check('4.55%' in pg.locator('#wasteDay tbody tr.total').inner_text(),
+          '月合計も 4.55%')
+    pg.locator('#pillWasteDay button[data-d=spare]').click()
+    pg.wait_for_timeout(200)
+    check(wd.nth(5).locator('td').nth(2).inner_text() == '10.00%',
+          '日ごとも予備率に切り替えられる（1/6 A全UV 10.00%）')
+    pg.locator('#pillWasteDay button[data-d=rate]').click()
+    pg.locator('#pillWasteDay button[data-d=yare]').click()
+    pg.wait_for_timeout(200)
+    check(wd.nth(5).locator('td').nth(2).inner_text() == '2,100',
+          'やれ枚数に切り替えられる（1/6 A全UV 2,100枚）')
+    pg.locator('#pillWasteDay button[data-d=out]').click()
+    pg.wait_for_timeout(200)
+    check(wd.nth(5).locator('td').nth(2).inner_text() == '46,200',
+          '出庫枚数にも切り替えられる（1/6 A全UV 46,200枚）')
+    pg.locator('#pillWasteDay button[data-d=rate]').click()
+    with pg.expect_download(timeout=30000) as dl5:
+        pg.locator('#btnCsvWasteDay').click()
+    check(dl5.value.suggested_filename.endswith('.xlsx'),
+          '日ごとの損紙率をExcelで保存できる  → ' + dl5.value.suggested_filename)
+
+    wr = pg.locator('#wasteRank tbody tr')
+    check(wr.count() == 70, '損紙の多い案件が69件＋合計行  → %d行' % wr.count())
+    yares = [int(wr.nth(i).locator('td').nth(8).inner_text().replace(',', ''))
+             for i in range(5)]
+    check(yares == sorted(yares, reverse=True),
+          'やれ枚数の多い順に並ぶ  → %s' % yares)
+    check(wr.first.locator('td').nth(7).inner_text() == '85,554',
+          '案件ごとの出庫枚数が出る  → ' + wr.first.locator('td').nth(7).inner_text())
+    pg.locator('#pillWasteSort button[data-s=rate]').click()
+    pg.wait_for_timeout(200)
+    check(pg.locator('#wasteRank tbody tr').first.locator('td').nth(9).inner_text() == '4.55%',
+          '損紙率の高い順にも並べ替えられる')
+    pg.locator('#pillWasteSort button[data-s=yare]').click()
+    pg.select_option('#selMonthW', '1')
+    pg.wait_for_timeout(200)
+    check('1月' in pg.locator('#wasteRankNote').inner_text(),
+          '月を選べる  → ' + pg.locator('#wasteRankNote').inner_text())
+    pg.select_option('#selMonthW', '0')
+    pg.screenshot(path=str(SHOT / '11_損紙率.png'), full_page=True)
+    with pg.expect_download(timeout=30000) as dl3:
+        pg.locator('#btnCsvWaste').click()
+    check(dl3.value.suggested_filename.endswith('.xlsx'),
+          '損紙率をExcelで保存できる  → ' + dl3.value.suggested_filename)
+    with pg.expect_download(timeout=30000) as dl4:
+        pg.locator('#btnCsvWasteRank').click()
+    check(dl4.value.suggested_filename.endswith('.xlsx'),
+          '損紙の多い案件をExcelで保存できる  → ' + dl4.value.suggested_filename)
+
     # ── 日報明細: 日報作成に使った内容がそのまま出る ──
     pg.locator('nav.tabs button[data-view=raw]').click()
     pg.select_option('#selMonthR', '1')
@@ -285,12 +430,12 @@ with sync_playwright() as pw:
         pg.wait_for_selector('#matrix tbody tr')
         check('%d年' % years[0] in pg.locator('#ttl').inner_text(),
               '%d年に切り替わる' % years[0])
-        t0 = pg.locator('#matrix tbody tr.total td').last.inner_text()
+        t0 = pg.locator('#matrix tbody.total tr').first.locator('td.yr').inner_text()
         pg.screenshot(path=str(SHOT / '09_年切替.png'), full_page=True)
         pg.select_option('#selYear', str(years[-1]))
         pg.wait_for_function('document.querySelector("#ttl").textContent.indexOf("%d年") === 0'
                              % years[-1])
-        t1 = pg.locator('#matrix tbody tr.total td').last.inner_text()
+        t1 = pg.locator('#matrix tbody.total tr').first.locator('td.yr').inner_text()
         check(t0 != t1, '年ごとに中身が入れ替わる  → %s / %s'
               % (t0.split(chr(10))[0], t1.split(chr(10))[0]))
     else:

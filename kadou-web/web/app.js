@@ -8,6 +8,9 @@ var YEARS = null, DATA = null, MEMO = {},
                 '生産管理部（工務）': 'km', 'その他': 'ot' };
 var S = { view: 'year', year: null, month: null, dept: '全社', deptC: '全社', monthC: 0,
           monthR: null, machineR: '全機械', q: '', qc: '', qr: '',
+          monthO: null, oper: 'rate',
+          monthW: 0, waste: 'rate', wasteSort: 'yare',
+          monthWD: null, wasteDay: 'rate',
           chart: 'stack', chartDept: 'すべて' };
 var MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
@@ -144,7 +147,8 @@ function render() {
     ? '<div class="warn"><b>注意</b><br>' + w.map(esc).join('<br>') + '</div>' : '';
   renderChartDeptSelect(); renderYear(); renderCompare();
   renderMonthControls(); renderMonth();
-  renderClientControls(); renderClient(); renderRawControls(); renderRaw(); renderSrc();
+  renderClientControls(); renderClient(); renderOper(); renderWaste();
+  renderRawControls(); renderRaw(); renderSrc();
 }
 
 /* ── 前年との比較 ──
@@ -205,7 +209,6 @@ function renderCompare() {
   var months = DATA.months || [];
   var ok = !!(prev && prev.byDept && months.length);
   $('#cmpYearCard').style.display = ok ? '' : 'none';
-  $('#cmpMonthCard').style.display = ok ? '' : 'none';
   if (!ok) { return; }
 
   var cur = curByDept(), pb = prev.byDept;
@@ -238,27 +241,6 @@ function renderCompare() {
       + '<td class="num">' + mark(ratio(cc, pc), cc, pc) + '</td></tr>';
   });
   $('#cmpSum').innerHTML = h + '</tbody>';
-
-  // ── 月別（部署別の前年比） ──
-  var t = '<thead><tr><th>部署</th>';
-  months.forEach(function (m) { t += '<th class="num">' + m + '月</th>'; });
-  t += '<th class="num">合計</th></tr></thead><tbody>';
-  rows.forEach(function (d) {
-    var all = d === '合計';
-    var ds = all ? DATA.depts : [d];
-    t += '<tr' + (all ? ' class="total"' : '') + '><th class="rh">' + esc(d) + '</th>';
-    months.concat(['計']).forEach(function (m) {
-      var ms = m === '計' ? months : [m];
-      var c = 0, p = 0;
-      ds.forEach(function (x) { c += pick(cur, x, ms, 0); p += pick(pb, x, ms, 0); });
-      t += '<td class="num" title="' + esc(d) + ' ' + (m === '計' ? '合計' : m + '月')
-        + '　今年 ' + num(c) + ' ／ 前年 ' + num(p) + '">'
-        + mark(ratio(c, p), c, p) + '<br><small>' + mark(delta(c, p), c, p)
-        + '</small></td>';
-    });
-    t += '</tr>';
-  });
-  $('#cmpMonth').innerHTML = t + '</tbody>';
 }
 
 /* ── 月別グラフ ──
@@ -373,8 +355,13 @@ function drawColumns(box, opt) {
       if (tot) {
         svg.appendChild(svText(cx + cw / 2, T + h - acc - 4, num(tot), 'val'));
       }
+      // 2本並ぶときは、どちらの年の棒かを下に出す（凡例を見に行かなくて済む）
+      if (ng > 1 && g.tag) {
+        svg.appendChild(svText(cx + cw / 2, T + h + 13, g.tag, 'ylab'));
+      }
     });
-    svg.appendChild(svText(L + band * i + band / 2, T + h + 18, m + '月', 'lab'));
+    svg.appendChild(svText(L + band * i + band / 2, T + h + (ng > 1 ? 29 : 18),
+                           m + '月', 'lab'));
   });
 
   // 区分線（隣り合う月の同じ段どうしをつなぐ細い線）
@@ -440,6 +427,9 @@ function drawColumns(box, opt) {
   box.appendChild(svg);
 }
 
+/* 棒の下に出す年。稼動日報のシート名（「26年1月」）と同じ下2桁の書き方 */
+function yearTag(y) { return ('0' + (y % 100)).slice(-2) + '年'; }
+
 function legendHtml(items, extra) {
   return items.map(function (it) {
     return '<span><i style="background:' + it.color
@@ -499,8 +489,9 @@ function renderChartYoY(prev) {
   };
   drawColumns($('#chart'), {
     months: months,
-    groups: [{ name: DATA.year + '年', series: mk(cur) },
-             { name: prev.year + '年', hatch: true, series: mk(pb) }],
+    groups: [{ name: DATA.year + '年', tag: yearTag(DATA.year), series: mk(cur) },
+             { name: prev.year + '年', tag: yearTag(prev.year), hatch: true,
+               series: mk(pb) }],
     line: null,
     yTitle: '通し数'
   });
@@ -540,38 +531,84 @@ function renderYear() {
 
   renderChart();
 
-  // 月×営業部 マトリクス
-  var t = $('#matrix'), h = '<thead><tr><th>部署</th>';
+  renderMatrix();
+}
+
+/* ── 月別 × 部署別 ──
+   「月別×部署別（通し数・件数）」と「月別 前年比（前年比・増減）」は、どちらも
+   行=部署／列=月の同じ形だったので1つの表にまとめた。部署ごとに区分の行を
+   4段（通し数・件数・前年比・増減）並べる。前年の稼動日報が無い年では、
+   前年比・増減の2段は出さない。 */
+
+/* この表で使う区分。前年の稼動日報が無い年では、通し数と件数だけになる。
+   前年・増減・前年比は通し数どうしの比較なので、通し数のすぐ下にまとめて置く */
+function matrixKinds() {
+  var prev = yearSummary(DATA.year - 1);
+  if (!prev || !prev.byDept || !(DATA.months || []).length) {
+    return [{ k: 'tsu', label: '本年（通し数）' }, { k: 'cnt', label: '件数' }];
+  }
+  return [{ k: 'tsu', label: '本年（通し数）' }, { k: 'pre', label: '前年' },
+          { k: 'dif', label: '増減' }, { k: 'yoy', label: '前年比' },
+          { k: 'cnt', label: '件数' }];
+}
+
+/* 部署（'合計' なら全社）の、その月の [通し数, 件数] */
+function cell(dept, month) {
+  var rs = recs(month, dept === '合計' ? null : dept);
+  return [rs.reduce(function (s, r) { return s + r.tsu; }, 0), rs.length];
+}
+
+function renderMatrix() {
+  var kinds = matrixKinds(), yoy = kinds.length > 2;   // 前年の行が出るか
+  var prev = yoy ? yearSummary(DATA.year - 1) : null;
+  var cur = yoy ? curByDept() : null, pb = prev ? prev.byDept : null;
+  var have = DATA.months || [];   // 今年データのある月。前年比はこの月だけ出す
+
+  var h = '<thead><tr><th>部署</th><th>区分</th>';
   MONTHS.forEach(function (m) { h += '<th class="num">' + m + '月</th>'; });
-  h += '<th class="num">年間合計</th></tr></thead><tbody>';
-  DATA.depts.forEach(function (d) {
-    h += '<tr><td><b>' + esc(d) + '</b></td>';
-    var sum = 0, cnt = 0;
-    MONTHS.forEach(function (m) {
-      var rs = recs(m, d), v = rs.reduce(function (s, r) { return s + r.tsu; }, 0);
-      sum += v; cnt += rs.length;
-      h += '<td class="num"><a href="#" data-m="' + m + '" data-d="' + esc(d) + '" class="jump">'
-        + (v ? num(v) : '－') + '</a><br><small style="color:#5b6478">'
-        + (rs.length ? rs.length + '件' : '') + '</small></td>';
+  h += '<th class="num">年間合計</th></tr></thead>';
+
+  // 部署ごとに tbody を分ける。区切り線を引きやすく、印刷でも4段が離れない
+  DATA.depts.concat(['合計']).forEach(function (d) {
+    var all = d === '合計';
+    var ds = all ? DATA.depts : [d];
+    h += '<tbody' + (all ? ' class="total"' : '') + '>';
+    kinds.forEach(function (kind, i) {
+      h += '<tr class="k-' + kind.k + '">';
+      if (i === 0) {
+        h += '<th class="rh" rowspan="' + kinds.length + '">' + esc(d)
+          + (all ? '' : '<small>' + esc(deptCodeLabel(d)) + '</small>') + '</th>';
+      }
+      h += '<th class="kh">' + kind.label + '</th>';
+      MONTHS.concat([0]).forEach(function (m) {     // 0 = 年間合計の列
+        h += matrixCell(kind.k, d, ds, m, cur, pb, have);
+      });
+      h += '</tr>';
     });
-    h += '<td class="num"><b>' + num(sum) + '</b><br><small style="color:#5b6478">' + cnt + '件</small></td></tr>';
+    h += '</tbody>';
   });
-  h += '<tr class="total"><td>合計</td>';
-  var gt = 0, gc = 0;
-  MONTHS.forEach(function (m) {
-    var rs = recs(m, null), v = rs.reduce(function (s, r) { return s + r.tsu; }, 0);
-    gt += v; gc += rs.length;
-    h += '<td class="num">' + (v ? num(v) : '－') + '<br><small>' + (rs.length ? rs.length + '件' : '') + '</small></td>';
-  });
-  h += '<td class="num">' + num(gt) + '<br><small>' + gc + '件</small></td></tr></tbody>';
-  t.innerHTML = h;
-  $$('#matrix a.jump').forEach(function (a) {
-    a.onclick = function (e) {
-      e.preventDefault();
-      S.month = +a.dataset.m; S.dept = a.dataset.d;
-      switchView('month'); renderMonthControls(); renderMonth();
-    };
-  });
+  $('#matrix').innerHTML = h;
+}
+
+/* 1マス分。m=0 は年間合計の列 */
+function matrixCell(k, d, ds, m, cur, pb, have) {
+  var year = !m, name = year ? '年間合計' : m + '月';
+  var cls = 'num' + (year ? ' yr' : '');
+  if (k === 'tsu' || k === 'cnt') {
+    var v = cell(d, year ? null : m)[k === 'tsu' ? 0 : 1];
+    var txt = v ? (k === 'cnt' ? num(v) + '件' : num(v)) : '－';
+    return '<td class="' + cls + '">' + txt + '</td>';
+  }
+  // 前年・増減・前年比は、今年データのある月だけ出す。年の途中までしか入って
+  // いない年で、未到来の月を 0% や前年だけの数字で埋めてしまわないようにする
+  var ms = year ? have : (have.indexOf(m) >= 0 ? [m] : null);
+  if (!ms || !ms.length) { return '<td class="' + cls + '"></td>'; }
+  var c = 0, p = 0;
+  ds.forEach(function (x) { c += pick(cur, x, ms, 0); p += pick(pb, x, ms, 0); });
+  if (k === 'pre') { return '<td class="' + cls + '">' + (p ? num(p) : '－') + '</td>'; }
+  return '<td class="' + cls + '" title="' + esc(d) + ' ' + name
+    + '　本年 ' + num(c) + ' ／ 前年 ' + num(p) + '">'
+    + mark(k === 'yoy' ? ratio(c, p) : delta(c, p), c, p) + '</td>';
 }
 
 /* 月別明細 */
@@ -860,6 +897,456 @@ function renderClient() {
   t.innerHTML = h;
 }
 
+
+/* ── 稼働率 ──
+   分母 = 就業可能時間（1日22時間の2直 × その月の稼働日数）
+   分子 = 稼動日報の「有効時間」（機械が実際に動いていた時間）
+   稼働日 = 平日 − 祝日（振替休日・国民の休日を含む） − 会社の休業日
+   もとになる数字は build.py が data_<年>.json の oper に入れてくれる。 */
+var WDAY = ['日', '月', '火', '水', '木', '金', '土'];
+
+function oper() { return DATA && DATA.oper; }
+function operMonth(m) {
+  var o = oper();
+  return (o && o.months && o.months[String(m)]) || null;
+}
+
+/* その月・その機械の分母（時間）。機械を選ばなければ全機械ぶん */
+function operBase(m, machines) {
+  var o = oper(), v = operMonth(m);
+  if (!o || !v) { return 0; }
+  return o.shift * v.work * (machines == null ? 1 : machines);
+}
+
+function rate(hours, base) {
+  return base ? (hours / base * 100).toFixed(1) + '%' : '－';
+}
+
+/* 稼働率の高さで濃さを変える（表を目で追えるように） */
+function heat(pct) {
+  if (pct == null) { return ''; }
+  var k = Math.max(0, Math.min(1, pct / 100));
+  return ' style="background:rgba(58,68,80,' + (0.03 + k * 0.17).toFixed(3) + ')"';
+}
+
+function renderOper() {
+  var o = oper();
+  var box = $('#v-oper');
+  if (!o || !o.machines.length) {
+    $('#operSum').innerHTML = '<tbody><tr><td class="empty">'
+      + 'この年の稼動日報に「有効時間」が入っていないため、稼働率は出せません。'
+      + '</td></tr></tbody>';
+    $('#operDay').innerHTML = '';
+    $('#operNote').textContent = '';
+    return;
+  }
+  var ms = o.machines, months = DATA.months || [];
+  $('#operNote').textContent = '1日' + o.shift + '時間（2直）× 稼働日数 が分母';
+
+  // ── 機械 × 月 ──
+  var h = '<thead><tr><th>機械</th>';
+  months.forEach(function (m) { h += '<th class="num">' + m + '月</th>'; });
+  h += '<th class="num">年間</th></tr></thead><tbody>';
+
+  // 稼働日数の行（分母の内訳が分かるように）
+  h += '<tr class="sub2"><th class="rh">稼働日数</th>';
+  var workAll = 0;
+  months.forEach(function (m) {
+    var v = operMonth(m);
+    var w = v ? v.work : 0;
+    workAll += w;
+    h += '<td class="num">' + w + '日</td>';
+  });
+  h += '<td class="num">' + workAll + '日</td></tr>';
+
+  ms.concat(['全機械']).forEach(function (mc) {
+    var all = mc === '全機械';
+    var list = all ? ms : [mc];
+    h += '<tr' + (all ? ' class="total"' : '') + '><th class="rh">' + esc(mc) + '</th>';
+    var th = 0, tb = 0;
+    months.forEach(function (m) {
+      var v = operMonth(m);
+      var hh = v ? list.reduce(function (s, k) { return s + (v.tot[k] || 0); }, 0) : 0;
+      var b = operBase(m, list.length);
+      th += hh; tb += b;
+      var pct = b ? hh / b * 100 : null;
+      h += '<td class="num"' + heat(pct) + ' title="' + esc(mc) + ' ' + m + '月　有効時間 '
+        + hh.toFixed(1) + 'h ／ 就業可能 ' + b.toFixed(0) + 'h（'
+        + (v ? v.work : 0) + '日）">' + rate(hh, b) + '</td>';
+    });
+    h += '<td class="num yr" title="' + esc(mc) + ' 年間　有効時間 ' + th.toFixed(1)
+      + 'h ／ 就業可能 ' + tb.toFixed(0) + 'h">' + rate(th, tb) + '</td></tr>';
+  });
+  $('#operSum').innerHTML = h + '</tbody>';
+
+  renderOperDayControls();
+  renderOperDay();
+}
+
+function renderOperDayControls() {
+  var sel = $('#selMonthO'), months = DATA.months || [];
+  if (months.indexOf(S.monthO) < 0) { S.monthO = months[months.length - 1] || 1; }
+  sel.innerHTML = '';
+  months.forEach(function (m) {
+    var v = operMonth(m);
+    var o = el('option', null, DATA.year + '年 ' + m + '月'
+      + (v ? '（稼働 ' + v.work + '日）' : ''));
+    o.value = m;
+    if (m === S.monthO) { o.selected = true; }
+    sel.appendChild(o);
+  });
+  sel.onchange = function () { S.monthO = +sel.value; renderOperDay(); };
+  $$('#pillOper button').forEach(function (b) {
+    b.className = b.dataset.o === S.oper ? 'on' : '';
+  });
+}
+
+/* 選んだ月の 日 × 機械 */
+function renderOperDay() {
+  var o = oper(), v = operMonth(S.monthO);
+  if (!o || !v) { $('#operDay').innerHTML = ''; return; }
+  var ms = o.machines, rates = S.oper === 'rate';
+  var last = new Date(DATA.year, S.monthO, 0).getDate();
+  $('#operDayNote').textContent = DATA.year + '年' + S.monthO + '月　稼働 ' + v.work
+    + '日 × ' + o.shift + '時間 = ' + (v.work * o.shift) + '時間';
+
+  var h = '<thead><tr><th>日</th><th>曜</th><th>区分</th>';
+  ms.forEach(function (m) { h += '<th class="num">' + esc(m) + '</th>'; });
+  h += '<th class="num">全機械</th></tr></thead><tbody>';
+
+  var sum = {}, shown = {};
+  for (var d = 1; d <= last; d++) {
+    var w = new Date(DATA.year, S.monthO - 1, d).getDay();
+    var why = v.off[String(d)] || (w === 0 ? '日曜' : w === 6 ? '土曜' : '');
+    var hours = v.days[String(d)] || {};
+    var work = !why;
+    h += '<tr class="' + (why ? 'off' : '') + '"><td class="num">' + d + '</td>'
+      + '<td class="c' + (w === 0 ? ' sun' : w === 6 ? ' sat' : '') + '">' + WDAY[w] + '</td>'
+      + '<td>' + esc(why || '稼働日') + '</td>';
+    var day = 0;
+    ms.forEach(function (m) {
+      var x = hours[m] || 0;
+      sum[m] = (sum[m] || 0) + x;
+      shown[m] = (shown[m] || 0) + x;
+      day += x;
+      h += '<td class="num"' + (work ? heat(x ? x / o.shift * 100 : 0) : '') + '>'
+        + (x ? (rates ? rate(x, o.shift) : x.toFixed(2) + 'h') : '－') + '</td>';
+    });
+    h += '<td class="num yr">'
+      + (day ? (rates ? rate(day, o.shift * ms.length) : day.toFixed(2) + 'h') : '－')
+      + '</td></tr>';
+  }
+
+  // 日付が取れなかった行（日報のブロックに日付が無く、直前の明細も無いとき）
+  var extra = {}, any = false;
+  ms.forEach(function (m) {
+    extra[m] = Math.round(((v.tot[m] || 0) - (shown[m] || 0)) * 100) / 100;
+    if (Math.abs(extra[m]) > 0.005) { any = true; }
+  });
+  if (any) {
+    h += '<tr class="off"><td class="c" colspan="3">日付不明</td>';
+    ms.forEach(function (m) {
+      h += '<td class="num">' + (extra[m] ? extra[m].toFixed(2) + 'h' : '－') + '</td>';
+    });
+    h += '<td class="num yr">'
+      + ms.reduce(function (s, m) { return s + extra[m]; }, 0).toFixed(2) + 'h</td></tr>';
+  }
+
+  h += '<tr class="total"><td class="c" colspan="3">月合計</td>';
+  var base = o.shift * v.work;
+  ms.forEach(function (m) {
+    var t = v.tot[m] || 0;
+    h += '<td class="num" title="有効時間 ' + t.toFixed(1) + 'h ／ 就業可能 '
+      + base.toFixed(0) + 'h">' + (rates ? rate(t, base) : t.toFixed(1) + 'h') + '</td>';
+  });
+  var tall = ms.reduce(function (s, m) { return s + (v.tot[m] || 0); }, 0);
+  h += '<td class="num yr">'
+    + (rates ? rate(tall, base * ms.length) : tall.toFixed(1) + 'h') + '</td></tr>';
+  $('#operDay').innerHTML = h + '</tbody>';
+}
+
+
+/* ── 損紙率・予備率 ──
+     出庫枚数 = 実印刷枚数 ＋ 基準印刷予備（倉庫から出した紙）
+     損紙率   = やれ枚数 ÷ 出庫枚数
+                やれ枚数 = 出庫枚数からはみ出して使ってしまった紙（損紙）
+     予備率   = 基準印刷予備 ÷ 実印刷枚数
+                基準印刷予備 = 出庫枚数 − 実印刷枚数
+   出庫枚数は用紙を出すたびに1行へまとめて入るので、明細行すべてには入って
+   いない。その行にも日付と機械があるので、月別・日別・機械別に足せる。
+   2015年より前の日報には出庫枚数の列が無く、その年はどちらも出せない。
+   1マスは [出庫枚数, やれ枚数, 通し枚数, 実印刷枚数] の形で入っている。 */
+var W_OUT = 0, W_YARE = 1, W_TSU = 2, W_PRN = 3;
+
+function waste() { return DATA && DATA.waste; }
+
+function wasteRate(out, yare) {
+  return out ? (yare / out * 100).toFixed(2) + '%' : '－';
+}
+
+/* 予備率 = 基準印刷予備 ÷ 実印刷枚数 */
+function spareRate(v) {
+  return v[W_PRN] ? ((v[W_OUT] - v[W_PRN]) / v[W_PRN] * 100).toFixed(2) + '%' : '－';
+}
+
+/* 率が高いほど濃くする（max で最も濃い） */
+function wheat(pct, max) {
+  if (pct == null) { return ''; }
+  var k = Math.max(0, Math.min(1, pct / (max || 8)));
+  return ' style="background:rgba(153,34,34,' + (0.03 + k * 0.17).toFixed(3) + ')"';
+}
+
+/* いま選んでいる表示のマスの濃さ（率のときだけ色を付ける） */
+function wasteHeat(v, kind) {
+  if (kind === 'rate') {
+    return v[W_OUT] ? wheat(v[W_YARE] / v[W_OUT] * 100, 8) : '';
+  }
+  if (kind === 'spare') {
+    return v[W_PRN] ? wheat((v[W_OUT] - v[W_PRN]) / v[W_PRN] * 100, 40) : '';
+  }
+  return '';
+}
+
+function wasteMonth(m) {
+  var w = waste();
+  return (w && w.months && w.months[String(m)]) || null;
+}
+
+/* 表の中のマスを足す。machine を省くと全機械ぶん */
+function wasteSumOf(src, machine) {
+  var s = [0, 0, 0, 0];
+  if (src) {
+    (machine ? [machine] : Object.keys(src)).forEach(function (k) {
+      if (src[k]) { src[k].forEach(function (v, i) { s[i] += v; }); }
+    });
+  }
+  return s;
+}
+
+/* その月・その機械のマス。機械を省くと全機械ぶん */
+function wasteOf(m, machine) {
+  var v = wasteMonth(m);
+  return wasteSumOf(v && v.tot, machine);
+}
+
+/* マスの表示（損紙率／予備率／やれ枚数／出庫枚数） */
+function wasteCell(v, kind) {
+  if (kind === 'spare') { return spareRate(v); }
+  if (kind === 'yare') { return v[W_YARE] ? num(v[W_YARE]) : '－'; }
+  if (kind === 'out') { return v[W_OUT] ? num(v[W_OUT]) : '－'; }
+  return wasteRate(v[W_OUT], v[W_YARE]);
+}
+
+/* マスに乗せたときの吹き出し */
+function wasteTip(v) {
+  return '出庫 ' + num(v[W_OUT]) + ' ／ 実印刷 ' + num(v[W_PRN])
+    + ' ／ 基準予備 ' + num(v[W_OUT] - v[W_PRN]) + ' ／ やれ ' + num(v[W_YARE])
+    + ' ／ 通し ' + num(v[W_TSU]);
+}
+
+function renderWaste() {
+  var w = waste();
+  if (!w || !w.machines.length) {
+    $('#wasteSum').innerHTML = '<tbody><tr><td class="empty">'
+      + 'この年の稼動日報に「やれ枚数」が入っていないため、損紙率は出せません。'
+      + '</td></tr></tbody>';
+    $('#wasteDay').innerHTML = '';
+    $('#wasteRank').innerHTML = '';
+    $('#wasteNote').textContent = '';
+    return;
+  }
+  var ms = w.machines, months = DATA.months || [], kind = S.waste;
+  var yr = [0, 0, 0, 0];
+  months.forEach(function (m) { wasteOf(m).forEach(function (v, i) { yr[i] += v; }); });
+  // 出庫枚数の無い年（2015年より前）は、その旨を出す
+  // 出庫枚数の入っている案件が少なすぎる年（2015年より前）は数字を出さない
+  var cover = w.cover == null ? 1 : w.cover;
+  var enough = yr[W_OUT] && cover >= 0.5;
+  $('#wasteNote').textContent = enough
+    ? '年間　損紙率 ' + wasteRate(yr[W_OUT], yr[W_YARE]) + '（やれ '
+      + num(yr[W_YARE]) + ' ÷ 出庫 ' + num(yr[W_OUT]) + '）　／　予備率 '
+      + spareRate(yr) + '（基準予備 ' + num(yr[W_OUT] - yr[W_PRN]) + ' ÷ 実印刷 '
+      + num(yr[W_PRN]) + '）'
+      + (cover < 0.95 ? '　※出庫枚数の入っている案件 '
+                        + (cover * 100).toFixed(0) + '% ぶんです' : '')
+    : 'この年の稼動日報には出庫枚数がほとんど入っていないため、損紙率・予備率は'
+      + '出せません（出庫枚数のある案件 ' + (cover * 100).toFixed(1) + '%）';
+  if (!enough) {
+    var msg = '<tbody><tr><td class="empty">'
+      + 'この年の稼動日報には出庫枚数の列がほとんど入っていないため、'
+      + '損紙率・予備率は出せません。<br>出庫枚数は2016年以降の日報に入っています。'
+      + '</td></tr></tbody>';
+    $('#wasteSum').innerHTML = msg;
+    $('#wasteDay').innerHTML = '';
+    $('#wasteRank').innerHTML = '';
+    $('#wasteDayNote').textContent = '';
+    $('#wasteRankNote').textContent = '';
+    return;
+  }
+
+  var h = '<thead><tr><th>機械</th>';
+  months.forEach(function (m) { h += '<th class="num">' + m + '月</th>'; });
+  h += '<th class="num">年間</th></tr></thead><tbody>';
+  ms.concat(['全機械']).forEach(function (mc) {
+    var all = mc === '全機械';
+    h += '<tr' + (all ? ' class="total"' : '') + '><th class="rh">' + esc(mc) + '</th>';
+    var t = [0, 0, 0, 0];
+    months.concat([0]).forEach(function (m) {
+      var v = m ? wasteOf(m, all ? null : mc) : t;
+      if (m) { v.forEach(function (x, i) { t[i] += x; }); }
+      h += '<td class="num' + (m ? '' : ' yr') + '"' + (m ? wasteHeat(v, kind) : '')
+        + ' title="' + esc(mc) + ' ' + (m ? m + '月' : '年間') + '　' + wasteTip(v) + '">'
+        + wasteCell(v, kind) + '</td>';
+    });
+    h += '</tr>';
+  });
+  $('#wasteSum').innerHTML = h + '</tbody>';
+
+  renderWasteControls();
+  renderWasteDay();
+  renderWasteRank();
+}
+
+function renderWasteControls() {
+  var months = DATA.months || [];
+  if (months.indexOf(S.monthWD) < 0) { S.monthWD = months[months.length - 1] || 1; }
+  fillMonths($('#selMonthWD'), S.monthWD, false, function (m) {
+    S.monthWD = m; renderWasteDay();
+  });
+  fillMonths($('#selMonthW'), S.monthW, true, function (m) {
+    S.monthW = m; renderWasteRank();
+  });
+  $$('#pillWasteDay button').forEach(function (b) {
+    b.className = b.dataset.d === S.wasteDay ? 'on' : '';
+  });
+  $$('#pillWaste button').forEach(function (b) {
+    b.className = b.dataset.w === S.waste ? 'on' : '';
+  });
+  $$('#pillWasteSort button').forEach(function (b) {
+    b.className = b.dataset.s === S.wasteSort ? 'on' : '';
+  });
+}
+
+/* 日ごとの損紙率（日付順・機械順） */
+function renderWasteDay() {
+  var w = waste(), v = wasteMonth(S.monthWD);
+  if (!w || !v) { $('#wasteDay').innerHTML = ''; return; }
+  var ms = w.machines, kind = S.wasteDay;
+  var last = new Date(DATA.year, S.monthWD, 0).getDate();
+  var tot = wasteSumOf(v.tot);
+  $('#wasteDayNote').textContent = DATA.year + '年' + S.monthWD + '月　損紙率 '
+    + wasteRate(tot[W_OUT], tot[W_YARE]) + '　予備率 ' + spareRate(tot)
+    + '（出庫 ' + num(tot[W_OUT]) + ' ／ 実印刷 ' + num(tot[W_PRN])
+    + ' ／ やれ ' + num(tot[W_YARE]) + '）';
+
+  var h = '<thead><tr><th>日</th><th>曜</th>';
+  ms.forEach(function (m) { h += '<th class="num">' + esc(m) + '</th>'; });
+  h += '<th class="num">全機械</th></tr></thead><tbody>';
+
+  var shown = {};
+  ms.forEach(function (m) { shown[m] = [0, 0, 0, 0]; });
+  for (var d = 1; d <= last; d++) {
+    var wd = new Date(DATA.year, S.monthWD - 1, d).getDay();
+    var day = v.days[String(d)] || {};
+    var any = Object.keys(day).length > 0;
+    h += '<tr class="' + (any ? '' : 'off') + '"><td class="num">' + d + '</td>'
+      + '<td class="c' + (wd === 0 ? ' sun' : wd === 6 ? ' sat' : '') + '">'
+      + WDAY[wd] + '</td>';
+    ms.forEach(function (m) {
+      var x = day[m];
+      if (x) { x.forEach(function (q, i) { shown[m][i] += q; }); }
+      h += '<td class="num"' + (x ? wasteHeat(x, kind) : '')
+        + ' title="' + (x ? wasteTip(x) : '') + '">'
+        + (x ? wasteCell(x, kind) : '－') + '</td>';
+    });
+    var all = wasteSumOf(day);
+    h += '<td class="num yr">' + (any ? wasteCell(all, kind) : '－') + '</td></tr>';
+  }
+
+  // 日報の行に日付が無かった分（月合計と日ごとの和の差）
+  var extra = {}, some = false;
+  ms.forEach(function (m) {
+    var t = v.tot[m] || [0, 0, 0, 0];
+    extra[m] = t.map(function (q, i) { return q - shown[m][i]; });
+    if (extra[m].some(function (q) { return q; })) { some = true; }
+  });
+  if (some) {
+    h += '<tr class="off"><td class="c" colspan="2">日付不明</td>';
+    ms.forEach(function (m) {
+      h += '<td class="num">'
+        + (extra[m].some(function (q) { return q; }) ? wasteCell(extra[m], kind) : '－')
+        + '</td>';
+    });
+    h += '<td class="num yr">' + wasteCell(wasteSumOf(extra), kind) + '</td></tr>';
+  }
+
+  h += '<tr class="total"><td class="c" colspan="2">月合計</td>';
+  ms.forEach(function (m) {
+    h += '<td class="num">' + wasteCell(v.tot[m] || [0, 0, 0, 0], kind) + '</td>';
+  });
+  h += '<td class="num yr">' + wasteCell(tot, kind) + '</td></tr>';
+  $('#wasteDay').innerHTML = h + '</tbody>';
+}
+
+/* 損紙の多い案件（管理番号ごと。統合後の件数で数える） */
+var WASTETOP = 100;
+function renderWasteRank() {
+  // 数える範囲は上の「機械別 月間」の表とそろえる。r.ob は「その管理番号に
+  // 出庫枚数があるか」で、部署をまたいで判定してある。r.out > 0 で絞ると、
+  // 同じ管理番号が部署で分かれている案件のやれ枚数が落ちて月合計と合わなくなる。
+  var rows = recs(S.monthW || null, null).filter(function (r) {
+    return r.yare > 0 && r.ob;
+  });
+  var byRate = S.wasteSort === 'rate';
+  rows.sort(function (a, b) {
+    if (byRate) {
+      // 出庫枚数が別部署の行に入っている案件は率を出せないので後ろへ
+      var ra = a.out ? a.yare / a.out : -1, rb = b.out ? b.yare / b.out : -1;
+      return rb - ra || b.yare - a.yare;
+    }
+    return b.yare - a.yare || b.out - a.out;
+  });
+  var top = rows.slice(0, WASTETOP);
+  $('#wasteRankNote').textContent = (S.monthW ? S.monthW + '月' : '年間（全月）')
+    + '　損紙のあった案件 ' + num(rows.length) + ' 件'
+    + (rows.length > WASTETOP ? ' のうち上位 ' + WASTETOP + ' 件' : '');
+
+  var h = '<thead><tr><th>順位</th><th>管理番号</th><th>ｸﾗｲｱﾝﾄ名</th><th>品名</th>'
+    + '<th>営業部</th><th>機械</th>'
+    + (S.monthW ? '' : '<th class="c">月</th>')
+    + '<th class="num">出庫枚数</th><th class="num">やれ枚数</th>'
+    + '<th class="num">損紙率</th></tr></thead><tbody>';
+  top.forEach(function (r, i) {
+    var pct = r.out ? r.yare / r.out * 100 : null;
+    h += '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(r.no) + '</td>'
+      + '<td>' + esc(r.client) + '</td><td>' + esc(r.name) + '</td>'
+      + '<td>' + esc(shortDept(r.dept)) + '</td>'
+      + '<td>' + esc((r.machines || []).map(shortMachine).join(' / ')) + '</td>'
+      + (S.monthW ? '' : '<td class="c">' + r.m + '月</td>')
+      + '<td class="num">' + (r.out ? num(r.out) : '－') + '</td>'
+      + '<td class="num">' + num(r.yare) + '</td>'
+      + '<td class="num"' + (pct == null ? '' : wheat(pct)) + '>'
+      + wasteRate(r.out, r.yare) + '</td></tr>';
+  });
+  var to = rows.reduce(function (s, r) { return s + r.out; }, 0);
+  var ty = rows.reduce(function (s, r) { return s + r.yare; }, 0);
+  h += '<tr class="total"><td colspan="' + (S.monthW ? 6 : 7) + '">合計（損紙のあった案件）</td>'
+    + '<td class="num">' + num(to) + '</td><td class="num">' + num(ty) + '</td>'
+    + '<td class="num">' + wasteRate(to, ty) + '</td></tr>';
+  $('#wasteRank').innerHTML = h + '</tbody>';
+}
+
+/* 明細の機械名も、損紙率の表と同じ短い名前にそろえる
+   （build.py の short_machine と同じ切り方） */
+function shortMachine(s) {
+  var t = String(s == null ? '' : s)
+    .replace(/稼[働動](?:日報|実績)/g, '')
+    .replace(/^\s*新[・･\-_\s]*(?:(?:20)?\d{2}\s*年?[・･\-_\s]*)?/, '')
+    .replace(/^\s*(?:20)?\d{2}\s*年?[・･\-_\s]*/, '')
+    .replace(/^[\s・･\-_]+|[\s・･\-_]+$/g, '');
+  return t || String(s == null ? '' : s).trim();
+}
+
 /* 日報明細 ── 日報作成に使った内容をそのまま表示する */
 function rawRows() {
   var out = [];
@@ -1045,41 +1532,177 @@ function csvCmp() {
   csv(rows, DATA.year + '年_前年比較_部署別.xlsx');
 }
 
-function csvCmpM() {
-  var prev = yearSummary(DATA.year - 1), months = DATA.months || [];
-  if (!prev || !prev.byDept) { return; }
-  var cur = curByDept(), pb = prev.byDept;
-  var head = ['部署', '区分'].concat(months.map(function (m) { return m + '月'; }));
-  var rows = [head.concat(['合計'])];
+/* 月別 × 部署別（画面の表と同じ、部署ごとに区分4段） */
+function csvYear() {
+  var kinds = matrixKinds(), yoy = kinds.length > 2;
+  var prev = yoy ? yearSummary(DATA.year - 1) : null;
+  var cur = yoy ? curByDept() : null, pb = prev ? prev.byDept : null;
+  var have = DATA.months || [];
+  var rows = [['営業部', '区分']
+    .concat(MONTHS.map(function (m) { return m + '月'; })).concat(['年間合計'])];
   DATA.depts.concat(['合計']).forEach(function (d) {
     var ds = d === '合計' ? DATA.depts : [d];
-    var now = [], before = [];
-    months.concat(['計']).forEach(function (m) {
-      var ms = m === '計' ? months : [m];
-      var c = 0, p = 0;
-      ds.forEach(function (x) { c += pick(cur, x, ms, 0); p += pick(pb, x, ms, 0); });
-      now.push(c); before.push(p);
+    kinds.forEach(function (kind) {
+      rows.push([d, kind.label].concat(MONTHS.concat([0]).map(function (m) {
+        var year = !m;
+        if (kind.k === 'tsu' || kind.k === 'cnt') {
+          return cell(d, year ? null : m)[kind.k === 'tsu' ? 0 : 1];
+        }
+        var ms = year ? have : (have.indexOf(m) >= 0 ? [m] : null);
+        if (!ms || !ms.length) { return ''; }
+        var c = 0, p = 0;
+        ds.forEach(function (x) { c += pick(cur, x, ms, 0); p += pick(pb, x, ms, 0); });
+        return kind.k === 'pre' ? p : kind.k === 'yoy' ? ratio(c, p) : c - p;
+      })));
     });
-    rows.push([d, '今年'].concat(now));
-    rows.push([d, '前年'].concat(before));
-    rows.push([d, '前年比'].concat(now.map(function (c, i) {
-      return ratio(c, before[i]);
-    })));
   });
-  csv(rows, DATA.year + '年_月別前年比_部署別.xlsx');
+  csv(rows, DATA.year + '年_月別営業部別.xlsx');
 }
 
-function csvYear() {
-  var rows = [['営業部'].concat(MONTHS.map(function (m) { return m + '月'; })).concat(['年間合計'])];
-  DATA.depts.forEach(function (d) {
-    rows.push([d].concat(MONTHS.map(function (m) {
-      return recs(m, d).reduce(function (s, r) { return s + r.tsu; }, 0);
-    })).concat([recs(null, d).reduce(function (s, r) { return s + r.tsu; }, 0)]));
+/* 稼働率（機械 × 月） */
+function csvOper() {
+  var o = oper();
+  if (!o || !o.machines.length) { return; }
+  var months = DATA.months || [];
+  var head = ['機械'].concat(months.map(function (m) { return m + '月'; })).concat(['年間']);
+  var rows = [head];
+  rows.push(['稼働日数'].concat(months.map(function (m) {
+    var v = operMonth(m); return v ? v.work : 0;
+  })).concat([months.reduce(function (s, m) {
+    var v = operMonth(m); return s + (v ? v.work : 0);
+  }, 0)]));
+  o.machines.concat(['全機械']).forEach(function (mc) {
+    var list = mc === '全機械' ? o.machines : [mc];
+    var th = 0, tb = 0;
+    var line = [mc].concat(months.map(function (m) {
+      var v = operMonth(m);
+      var hh = v ? list.reduce(function (s, k) { return s + (v.tot[k] || 0); }, 0) : 0;
+      var b = operBase(m, list.length);
+      th += hh; tb += b;
+      return rate(hh, b);
+    }));
+    rows.push(line.concat([rate(th, tb)]));
   });
-  rows.push(['合計'].concat(MONTHS.map(function (m) {
-    return recs(m, null).reduce(function (s, r) { return s + r.tsu; }, 0);
-  })).concat([DATA.records.reduce(function (s, r) { return s + r.tsu; }, 0)]));
-  csv(rows, DATA.year + '年_月別営業部別_通し数.xlsx');
+  csv(rows, DATA.year + '年_機械別_月間稼働率.xlsx');
+}
+
+/* 稼働率（日 × 機械） */
+function csvOperDay() {
+  var o = oper(), v = operMonth(S.monthO);
+  if (!o || !v) { return; }
+  var ms = o.machines, last = new Date(DATA.year, S.monthO, 0).getDate();
+  var rows = [['日', '曜', '区分'].concat(ms).concat(['全機械（有効時間）'])];
+  for (var d = 1; d <= last; d++) {
+    var w = new Date(DATA.year, S.monthO - 1, d).getDay();
+    var why = v.off[String(d)] || (w === 0 ? '日曜' : w === 6 ? '土曜' : '');
+    var hh = v.days[String(d)] || {};
+    rows.push([d, WDAY[w], why || '稼働日'].concat(ms.map(function (m) {
+      return hh[m] || 0;
+    })).concat([ms.reduce(function (s, m) { return s + (hh[m] || 0); }, 0)]));
+  }
+  var base = o.shift * v.work;
+  rows.push(['月合計', '', '稼働 ' + v.work + '日'].concat(ms.map(function (m) {
+    return v.tot[m] || 0;
+  })).concat([ms.reduce(function (s, m) { return s + (v.tot[m] || 0); }, 0)]));
+  rows.push(['稼働率', '', '分母 ' + base + '時間'].concat(ms.map(function (m) {
+    return rate(v.tot[m] || 0, base);
+  })).concat([rate(ms.reduce(function (s, m) { return s + (v.tot[m] || 0); }, 0),
+                   base * ms.length)]));
+  csv(rows, DATA.year + '年' + S.monthO + '月_日ごとの稼働率.xlsx');
+}
+
+/* 損紙率（機械 × 月） */
+function csvWaste() {
+  var w = waste();
+  if (!w || !w.machines.length) { return; }
+  var months = DATA.months || [];
+  var rows = [['機械', '区分'].concat(months.map(function (m) { return m + '月'; }))
+    .concat(['年間'])];
+  w.machines.concat(['全機械']).forEach(function (mc) {
+    var all = mc === '全機械';
+    var cells = months.map(function (m) { return wasteOf(m, all ? null : mc); });
+    var t = wasteSumOf0(cells);
+    var col = function (i) {
+      return cells.map(function (v) { return v[i]; }).concat([t[i]]);
+    };
+    rows.push([mc, '出庫枚数'].concat(col(W_OUT)));
+    rows.push([mc, '実印刷枚数'].concat(col(W_PRN)));
+    rows.push([mc, '基準印刷予備'].concat(cells.map(function (v) {
+      return v[W_OUT] - v[W_PRN];
+    })).concat([t[W_OUT] - t[W_PRN]]));
+    rows.push([mc, 'やれ枚数'].concat(col(W_YARE)));
+    rows.push([mc, '損紙率'].concat(cells.map(function (v) {
+      return wasteRate(v[W_OUT], v[W_YARE]);
+    })).concat([wasteRate(t[W_OUT], t[W_YARE])]));
+    rows.push([mc, '予備率'].concat(cells.map(spareRate)).concat([spareRate(t)]));
+  });
+  csv(rows, DATA.year + '年_機械別_月間損紙率.xlsx');
+}
+
+/* 日ごとの損紙率（日付順・機械順） */
+function csvWasteDay() {
+  var w = waste(), v = wasteMonth(S.monthWD);
+  if (!w || !v) { return; }
+  var ms = w.machines, last = new Date(DATA.year, S.monthWD, 0).getDate();
+  var head = ['日', '曜'];
+  ms.concat(['全機械']).forEach(function (m) {
+    head.push(m + ' 出庫枚数', m + ' 実印刷枚数', m + ' やれ枚数',
+              m + ' 損紙率', m + ' 予備率');
+  });
+  var rows = [head];
+  var line = function (label, wd, get) {
+    var r = [label, wd];
+    var put = function (x) {
+      r.push(x[W_OUT], x[W_PRN], x[W_YARE],
+             wasteRate(x[W_OUT], x[W_YARE]), spareRate(x));
+    };
+    ms.forEach(function (m) { put(get(m) || [0, 0, 0, 0]); });
+    put(wasteSumOf0(ms.map(get)));
+    return r;
+  };
+  for (var d = 1; d <= last; d++) {
+    var day = v.days[String(d)] || {};
+    rows.push(line(d, WDAY[new Date(DATA.year, S.monthWD - 1, d).getDay()],
+                   function (m) { return day[m]; }));
+  }
+  rows.push(line('月合計', '', function (m) { return v.tot[m]; }));
+  csv(rows, DATA.year + '年' + S.monthWD + '月_日ごとの損紙率.xlsx');
+}
+
+/* マスの配列を足す */
+function wasteSumOf0(list) {
+  var s = [0, 0, 0, 0];
+  list.forEach(function (x) { if (x) { x.forEach(function (v, i) { s[i] += v; }); } });
+  return s;
+}
+
+/* 損紙の多い案件 */
+function csvWasteRank() {
+  var rows = recs(S.monthW || null, null).filter(function (r) {
+    return r.yare > 0 && r.ob;
+  });
+  var byRate = S.wasteSort === 'rate';
+  rows.sort(function (a, b) {
+    if (byRate) {
+      var ra = a.out ? a.yare / a.out : -1, rb = b.out ? b.yare / b.out : -1;
+      return rb - ra || b.yare - a.yare;
+    }
+    return b.yare - a.yare || b.out - a.out;
+  });
+  var one = !!S.monthW;
+  var out = [['順位', '管理番号', 'ｸﾗｲｱﾝﾄ名', '品名', '営業部', '機械']
+    .concat(one ? [] : ['月']).concat(['出庫枚数', 'やれ枚数', '損紙率'])];
+  rows.forEach(function (r, i) {
+    out.push([i + 1, r.no, r.client, r.name, r.dept,
+      (r.machines || []).map(shortMachine).join(' / ')]
+      .concat(one ? [] : [r.m + '月'])
+      .concat([r.out, r.yare, wasteRate(r.out, r.yare)]));
+  });
+  var to = rows.reduce(function (s, r) { return s + r.out; }, 0);
+  var ty = rows.reduce(function (s, r) { return s + r.yare; }, 0);
+  out.push(['合計', '', '', '', '', ''].concat(one ? [] : [''])
+    .concat([to, ty, wasteRate(to, ty)]));
+  csv(out, DATA.year + '年' + (one ? S.monthW + '月' : '') + '_損紙の多い案件.xlsx');
 }
 
 function csvMonth() {
@@ -1123,7 +1746,8 @@ function switchView(v) {
 $$('nav.tabs button').forEach(function (b) { b.onclick = function () { switchView(b.dataset.view); }; });
 /* 印刷。いま開いているタブだけが紙に出る（他のタブは隠れている） */
 var VIEWNAME = { year: '年間サマリー', month: '月別明細', client: '得意先別',
-                 raw: '日報明細', src: '元ファイル' };
+                 oper: '稼働率', waste: '損紙・予備', raw: '日報明細',
+                 src: '元ファイル' };
 function setPrintTitle() {
   var t = $('#printTitle');
   if (!t || !DATA) { return; }
@@ -1153,9 +1777,29 @@ $('#selChartDept').onchange = function () {
 };
 $('#btnCsvYear').onclick = csvYear;
 $('#btnCsvCmp').onclick = csvCmp;
-$('#btnCsvCmpM').onclick = csvCmpM;
 $('#btnCsvMonth').onclick = csvMonth;
 $('#btnCsvClient').onclick = csvClient;
+$('#btnCsvOper').onclick = csvOper;
+$('#btnCsvOperDay').onclick = csvOperDay;
+$('#btnCsvWaste').onclick = csvWaste;
+$('#btnCsvWasteDay').onclick = csvWasteDay;
+$('#btnCsvWasteRank').onclick = csvWasteRank;
+$$('#pillWasteDay button').forEach(function (b) {
+  b.onclick = function () {
+    S.wasteDay = b.dataset.d; renderWasteControls(); renderWasteDay();
+  };
+});
+$$('#pillWaste button').forEach(function (b) {
+  b.onclick = function () { S.waste = b.dataset.w; renderWaste(); };
+});
+$$('#pillWasteSort button').forEach(function (b) {
+  b.onclick = function () {
+    S.wasteSort = b.dataset.s; renderWasteControls(); renderWasteRank();
+  };
+});
+$$('#pillOper button').forEach(function (b) {
+  b.onclick = function () { S.oper = b.dataset.o; renderOperDayControls(); renderOperDay(); };
+});
 $('#btnCsvRaw').onclick = csvRaw;
 
 $('#btnSetting').onclick = function () {
@@ -1164,11 +1808,13 @@ $('#btnSetting').onclick = function () {
     (c.srcAlt || []).forEach(function (x) { if (list.indexOf(x) < 0) list.push(x); });
     $('#inSrc').value = list.join('\n');
     $('#inYear').value = c.year || '';
+    $('#inClosed').value = (c.closed || []).join('\n');
     // 社内サーバーで共有しているときは、読むフォルダを画面から変えられない
     // （サーバー上の好きなフォルダを読めてしまわないようにするため）
     var ro = !!c.shared;
     $('#inSrc').readOnly = ro;
     $('#inYear').readOnly = ro;
+    $('#inClosed').readOnly = ro;
     $('#btnPick').style.display = ro ? 'none' : '';
     $('#dlgOk').style.display = ro ? 'none' : '';
     $('#sharedNote').style.display = ro ? '' : 'none';
@@ -1181,6 +1827,7 @@ $('#btnSetting').onclick = function () {
   }).catch(function () {
     $('#inSrc').value = DATA ? DATA.source : '';
     $('#inYear').value = '';
+    $('#inClosed').value = '';
     $('#dlg').showModal();
   });
 };
@@ -1205,14 +1852,17 @@ $('#btnPick').onclick = function () {
   });
 };
 $('#dlgCancel').onclick = function () { $('#dlg').close(); };
-$('#dlgOk').onclick = function () { $('#dlg').close(); doRebuild($('#inSrc').value, $('#inYear').value); };
+$('#dlgOk').onclick = function () {
+  $('#dlg').close();
+  doRebuild($('#inSrc').value, $('#inYear').value, $('#inClosed').value);
+};
 $('#btnRebuild').onclick = function () { doRebuild(); };
 
-function doRebuild(src, year) {
+function doRebuild(src, year, closed) {
   var b = $('#btnRebuild'); b.disabled = true; b.textContent = '読込中…';
   fetch('/api/rebuild', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ src: src, year: year })
+    body: JSON.stringify({ src: src, year: year, closed: closed })
   }).then(function (r) { return r.json(); }).then(function (j) {
     b.disabled = false; b.textContent = 'データ更新';
     if (!j.ok) { alert('読み込みに失敗しました:\n' + j.error); return; }

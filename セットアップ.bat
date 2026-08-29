@@ -6,12 +6,23 @@ cd /d "%~dp0"
 set REPO=https://github.com/komuazu/test.git
 set BRANCH=claude/factory-report-folder-check-b7a9kx
 set DIR=arunasiweb
+set TARGET=%CD%\%DIR%
+
+rem ── このファイルがすでに取得済みのフォルダの中にあるとき ────────
+rem   arunasiweb の中で実行すると arunasiweb\arunasiweb と入れ子になって
+rem   しまうため、そのときは入れ子を作らず、このフォルダ自身を更新する。
+if exist "%~dp0.git" if exist "%~dp0kadou-web" (
+  set DIR=.
+  set TARGET=%CD%
+  echo このフォルダ自身が取得済みです。ここを最新にします。
+  echo.
+)
 
 echo ============================================================
 echo   稼動日報ビューア  セットアップ
 echo     %REPO%
 echo     ブランチ: %BRANCH%
-echo     取得先  : %CD%\%DIR%
+echo     取得先  : %TARGET%
 echo ============================================================
 echo.
 
@@ -30,6 +41,9 @@ rem ── すでに clone 済みなら最新を取得するだけ ────
 if exist "%DIR%\.git" (
   echo すでにセットアップ済みです。最新を取得します。
   pushd "%DIR%"
+  rem まだ送っていない変更があるときは、上書きせずに止める
+  git diff-index --quiet HEAD --
+  if errorlevel 1 goto :dirty
   git fetch origin %BRANCH%
   if errorlevel 1 goto :fetchfail
   git checkout %BRANCH%
@@ -66,13 +80,23 @@ echo.
 echo ============================================================
 echo   完了しました
 echo.
-echo   アプリを開く   : %DIR%\kadou-web\起動.bat をダブルクリック
-echo   変更を送る     : %DIR%\プッシュ.bat をダブルクリック
+echo   アプリを開く   : %TARGET%\kadou-web\起動.bat をダブルクリック
+echo   変更を送る     : %TARGET%\プッシュ.bat をダブルクリック
 echo   最新を取り込む : このファイルをもう一度ダブルクリック
 echo ============================================================
 echo.
 pause
 exit /b 0
+
+:dirty
+popd 2>nul
+echo.
+echo [中止] このフォルダには、まだ GitHub に送っていない変更があります。
+echo   上書きしてしまわないよう、更新を止めました。
+echo   プッシュ.bat で変更を送ってから、もう一度お試しください。
+echo.
+pause
+exit /b 1
 
 :fetchfail
 popd 2>nul
