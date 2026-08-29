@@ -473,6 +473,10 @@ python server.py --src /tmp/sample --src /no/such/folder --no-browser &
 python tests/ui_test.py
 ```
 
+`--src /no/such/folder` は「見つからないフォルダの扱い」を確かめるためのもので、
+テストがこの文字列そのものを探しています。Windows でも**この形のまま**渡してください
+（`C:\no\such\folder` に書き換えると1件落ちます）。
+
 画面のテストは、`起動.bat` で使っている 8765 番以外でも動かせます。
 別のポートで立ち上げたときは `KADOU_PORT` を渡してください。
 
