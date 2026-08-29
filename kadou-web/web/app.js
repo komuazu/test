@@ -106,8 +106,102 @@ function render() {
   var w = DATA.warnings || [];
   $('#warns').innerHTML = w.length
     ? '<div class="warn"><b>注意</b><br>' + w.map(esc).join('<br>') + '</div>' : '';
-  renderYear(); renderMonthControls(); renderMonth();
+  renderYear(); renderCompare(); renderMonthControls(); renderMonth();
   renderClientControls(); renderClient(); renderRawControls(); renderRaw(); renderSrc();
+}
+
+/* ── 前年との比較 ──
+   前年の data_<年>.json は10MB前後あるので読み込まない。years.json に入れて
+   ある「月×部署」の小さな集計だけで、年間と月別の前年比を出す。
+   今年が年の途中までのときは、前年も同じ月までで比べる。 */
+function yearSummary(year) {
+  var ys = (YEARS && YEARS.years) || [];
+  for (var i = 0; i < ys.length; i++) { if (ys[i].year === year) { return ys[i]; } }
+  return null;
+}
+
+/* 今表示している年は、読み込み済みのデータから同じ形に集計する */
+function curByDept() {
+  var m = {};
+  (DATA.stats || []).forEach(function (st) {
+    (m[st.dept] || (m[st.dept] = {}))[String(st.m)] = [st.tsuGroups, st.groups];
+  });
+  return m;
+}
+
+function pick(byDept, dept, months, idx) {
+  var d = byDept[dept] || {}, t = 0;
+  months.forEach(function (m) { var v = d[String(m)]; if (v) { t += v[idx]; } });
+  return t;
+}
+
+function ratio(now, before) {
+  return before ? (now / before * 100).toFixed(1) + '%' : '－';
+}
+
+function delta(now, before) {
+  var d = now - before;
+  return (d > 0 ? '+' : d < 0 ? '-' : '±') + num(Math.abs(d));
+}
+
+function renderCompare() {
+  var prev = yearSummary(DATA.year - 1);
+  var months = DATA.months || [];
+  var ok = !!(prev && prev.byDept && months.length);
+  $('#cmpYearCard').style.display = ok ? '' : 'none';
+  $('#cmpMonthCard').style.display = ok ? '' : 'none';
+  if (!ok) { return; }
+
+  var cur = curByDept(), pb = prev.byDept;
+  var span = months.length === 12 ? '通年'
+    : months[0] + '月〜' + months[months.length - 1] + '月';
+  $('#cmpNote').textContent = DATA.year + '年（' + span + '）と '
+    + prev.year + '年の同じ月';
+
+  // ── 年間（部署別） ──
+  var rows = DATA.depts.concat(['合計']);
+  var h = '<thead><tr><th>部署</th><th class="num">通し数</th>'
+    + '<th class="num">前年</th><th class="num">増減</th><th class="num">前年比</th>'
+    + '<th class="num">件数</th><th class="num">前年</th><th class="num">前年比</th>'
+    + '</tr></thead><tbody>';
+  rows.forEach(function (d) {
+    var all = d === '合計';
+    var ds = all ? DATA.depts : [d];
+    var ct = 0, pt = 0, cc = 0, pc = 0;
+    ds.forEach(function (x) {
+      ct += pick(cur, x, months, 0); pt += pick(pb, x, months, 0);
+      cc += pick(cur, x, months, 1); pc += pick(pb, x, months, 1);
+    });
+    h += '<tr' + (all ? ' class="total"' : '') + '><th class="rh">' + esc(d) + '</th>'
+      + '<td class="num">' + num(ct) + '</td>'
+      + '<td class="num">' + num(pt) + '</td>'
+      + '<td class="num">' + delta(ct, pt) + '</td>'
+      + '<td class="num">' + ratio(ct, pt) + '</td>'
+      + '<td class="num">' + num(cc) + '</td>'
+      + '<td class="num">' + num(pc) + '</td>'
+      + '<td class="num">' + ratio(cc, pc) + '</td></tr>';
+  });
+  $('#cmpSum').innerHTML = h + '</tbody>';
+
+  // ── 月別（部署別の前年比） ──
+  var t = '<thead><tr><th>部署</th>';
+  months.forEach(function (m) { t += '<th class="num">' + m + '月</th>'; });
+  t += '<th class="num">合計</th></tr></thead><tbody>';
+  rows.forEach(function (d) {
+    var all = d === '合計';
+    var ds = all ? DATA.depts : [d];
+    t += '<tr' + (all ? ' class="total"' : '') + '><th class="rh">' + esc(d) + '</th>';
+    months.concat(['計']).forEach(function (m) {
+      var ms = m === '計' ? months : [m];
+      var c = 0, p = 0;
+      ds.forEach(function (x) { c += pick(cur, x, ms, 0); p += pick(pb, x, ms, 0); });
+      t += '<td class="num" title="' + esc(d) + ' ' + (m === '計' ? '合計' : m + '月')
+        + '　今年 ' + num(c) + ' ／ 前年 ' + num(p) + '">'
+        + ratio(c, p) + '<br><small>' + delta(c, p) + '</small></td>';
+    });
+    t += '</tr>';
+  });
+  $('#cmpMonth').innerHTML = t + '</tbody>';
 }
 
 /* 年間サマリー */
@@ -644,6 +738,48 @@ function csv(rows, filename) {
   setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
 }
 
+function csvCmp() {
+  var prev = yearSummary(DATA.year - 1), months = DATA.months || [];
+  if (!prev || !prev.byDept) { return; }
+  var cur = curByDept(), pb = prev.byDept;
+  var rows = [['部署', '通し数', '前年', '増減', '前年比',
+               '件数', '前年', '前年比（件数）']];
+  DATA.depts.concat(['合計']).forEach(function (d) {
+    var ds = d === '合計' ? DATA.depts : [d];
+    var ct = 0, pt = 0, cc = 0, pc = 0;
+    ds.forEach(function (x) {
+      ct += pick(cur, x, months, 0); pt += pick(pb, x, months, 0);
+      cc += pick(cur, x, months, 1); pc += pick(pb, x, months, 1);
+    });
+    rows.push([d, ct, pt, ct - pt, ratio(ct, pt), cc, pc, ratio(cc, pc)]);
+  });
+  csv(rows, DATA.year + '年_前年比較_部署別.csv');
+}
+
+function csvCmpM() {
+  var prev = yearSummary(DATA.year - 1), months = DATA.months || [];
+  if (!prev || !prev.byDept) { return; }
+  var cur = curByDept(), pb = prev.byDept;
+  var head = ['部署', '区分'].concat(months.map(function (m) { return m + '月'; }));
+  var rows = [head.concat(['合計'])];
+  DATA.depts.concat(['合計']).forEach(function (d) {
+    var ds = d === '合計' ? DATA.depts : [d];
+    var now = [], before = [];
+    months.concat(['計']).forEach(function (m) {
+      var ms = m === '計' ? months : [m];
+      var c = 0, p = 0;
+      ds.forEach(function (x) { c += pick(cur, x, ms, 0); p += pick(pb, x, ms, 0); });
+      now.push(c); before.push(p);
+    });
+    rows.push([d, '今年'].concat(now));
+    rows.push([d, '前年'].concat(before));
+    rows.push([d, '前年比'].concat(now.map(function (c, i) {
+      return ratio(c, before[i]);
+    })));
+  });
+  csv(rows, DATA.year + '年_月別前年比_部署別.csv');
+}
+
 function csvYear() {
   var rows = [['営業部'].concat(MONTHS.map(function (m) { return m + '月'; })).concat(['年間合計'])];
   DATA.depts.forEach(function (d) {
@@ -698,6 +834,8 @@ function switchView(v) {
 $$('nav.tabs button').forEach(function (b) { b.onclick = function () { switchView(b.dataset.view); }; });
 $('#btnPrint').onclick = function () { window.print(); };
 $('#btnCsvYear').onclick = csvYear;
+$('#btnCsvCmp').onclick = csvCmp;
+$('#btnCsvCmpM').onclick = csvCmpM;
 $('#btnCsvMonth').onclick = csvMonth;
 $('#btnCsvClient').onclick = csvClient;
 $('#btnCsvRaw').onclick = csvRaw;

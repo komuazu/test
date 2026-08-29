@@ -35,6 +35,18 @@ with sync_playwright() as pw:
     check(pg.locator('#sum tbody tr.total td').first.inner_text().replace(',', '')
           == '1874777', '年間集計の合計が 1,874,777 通し（その他を含む）')
     check(pg.locator('#chart .bar').count() == 12, '棒グラフが12か月分')
+
+    # ── 前年との比較（2026年と2025年） ──
+    check(pg.locator('#cmpSum tbody tr').count() == 6, '前年との比較が5部署+合計行')
+    hdr = pg.locator('#cmpSum thead').inner_text()
+    check('前年' in hdr and '増減' in hdr and '前年比' in hdr,
+          '前年・増減・前年比の列がある')
+    check('2025年' in pg.locator('#cmpNote').inner_text(),
+          '比べている年が見出しに出る  → ' + pg.locator('#cmpNote').inner_text())
+    check(pg.locator('#cmpMonth tbody tr').count() == 6, '月別前年比が5部署+合計行')
+    tip = pg.locator('#cmpMonth tbody tr.total td').first.get_attribute('title')
+    check('今年' in tip and '前年' in tip,
+          '月別前年比のマスに今年と前年の数字が出る  → ' + tip)
     check(pg.locator('#matrix tbody tr').count() == 6, 'マトリクスが5部署+合計行')
     total = pg.locator('#matrix tbody tr.total td').last.inner_text()
     check('1,874,777' in total, '年間合計 1,874,777 通し  → ' + total.replace('\n', ' '))

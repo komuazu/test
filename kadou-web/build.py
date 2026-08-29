@@ -527,12 +527,20 @@ def build(src, year=None, outdir=None):
         data['skipped'] = skipped
         (outdir / ('data_%d.json' % y)).write_text(
             json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        # 前年と比べるための小さな集計。画面はこれだけを使うので、前年の
+        # data_<年>.json（10MB前後）を読み込まずに前年比が出せる。
+        by_dept = OrderedDict()
+        for st in data['stats']:
+            by_dept.setdefault(st['dept'], {})[str(st['m'])] = [st['tsuGroups'],
+                                                                st['groups']]
         summary.append({
             'year':    y,
             'months':  data['months'],
             'records': len(data['records']),
             'detail':  sum(s['detail'] for s in data['stats']),
             'tsu':     sum(s['tsuGroups'] for s in data['stats']),
+            'depts':   list(data['depts']),
+            'byDept':  by_dept,          # {部署: {"月": [通し数, 件数]}}
         })
 
     if not year:

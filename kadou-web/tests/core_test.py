@@ -222,6 +222,14 @@ def main():
         check(y26['detail'] == 71 and y26['records'] == 69,
               '2026年は明細71行 → 69件に統合')
 
+        man = json.loads((out / 'years.json').read_text(encoding='utf-8'))
+        y26s = [y for y in man['years'] if y['year'] == 2026][0]
+        tot = sum(v[0] for dd in y26s['byDept'].values() for v in dd.values())
+        cnt = sum(v[1] for dd in y26s['byDept'].values() for v in dd.values())
+        check(tot == y26s['tsu'],
+              '前年比較用の月×部署の集計が年間通し数と一致  → %s' % format(tot, ','))
+        check(cnt == y26s['records'], '同じく件数も年間件数と一致  → %s' % format(cnt, ','))
+
         d26 = json.loads((out / 'data_2026.json').read_text(encoding='utf-8'))
         check(d26['depts'][-1] == 'その他', '並びの最後が「その他」')
         check(d26['depts'] == ['本社営業部', '東京営業部', '池袋営業部',

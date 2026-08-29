@@ -37,6 +37,24 @@
       <div class="scroll"><table id="sum"></table></div>
     </div>
 
+    <div class="card" id="cmpYearCard">
+      <h2>前年との比較 <small id="cmpNote"></small></h2>
+      <div class="toolbar">
+        <button class="btn" id="btnCsvCmp">この表をCSVで保存</button>
+      </div>
+      <div class="scroll"><table id="cmpSum"></table></div>
+      <p class="note">前年は<b>同じ月まで</b>で比べています。年の途中までしか
+        入っていない年でも、前年の同じ期間と並べられます。</p>
+    </div>
+
+    <div class="card" id="cmpMonthCard">
+      <h2>月別 前年比 <small>部署ごと。上段=前年比／下段=増減（通し数）</small></h2>
+      <div class="toolbar">
+        <button class="btn" id="btnCsvCmpM">この表をCSVで保存</button>
+      </div>
+      <div class="scroll"><table id="cmpMonth"></table></div>
+    </div>
+
     <div class="card">
       <h2>月別 通し数 <small>部署の積み上げ</small></h2>
       <div class="bars" id="chart"></div>
