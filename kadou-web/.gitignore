@@ -2,6 +2,8 @@
 config.json
 memo.json
 memo.json.tmp
+memo_前回.json
+password.txt
 web/data.json
 web/data_*.json
 web/years.json

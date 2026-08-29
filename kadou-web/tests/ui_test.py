@@ -34,7 +34,16 @@ with sync_playwright() as pw:
     check(pg.locator('#sum tbody tr').count() == 6, '年間集計が5部署+合計行')
     check(pg.locator('#sum tbody tr.total td').first.inner_text().replace(',', '')
           == '1874777', '年間集計の合計が 1,874,777 通し（その他を含む）')
-    check(pg.locator('#chart .bar').count() == 12, '棒グラフが12か月分')
+    check(pg.locator('#chart text.lab').count() == 12, '棒グラフが12か月分')
+    check(pg.locator('#chart rect.col').count() > 0, '積み上げの棒が出る')
+    check(pg.locator('#chart line.grid').count() >= 2, '目盛りの横線が引かれる')
+    check(pg.locator('#chart text.tick').count() >= 3, '左に通し数の目盛りが出る')
+    check(pg.locator('#chart line.conn').count() > 0,
+          '積み上げの段をつなぐ区分線が引かれる  → %d本'
+          % pg.locator('#chart line.conn').count())
+    check(pg.locator('#chart polyline.rate').count() == 0,
+          '積み上げには折れ線を出さない')
+    check(pg.locator('#chart text.val').count() > 0, '棒の上に合計が出る')
 
     # ── 前年との比較（2026年と2025年） ──
     check(pg.locator('#cmpSum tbody tr').count() == 6, '前年との比較が5部署+合計行')
@@ -51,30 +60,57 @@ with sync_playwright() as pw:
     # ── グラフを前年比較に切り替える ──
     pg.locator('#pillChart button[data-c=yoy]').click()
     pg.wait_for_timeout(300)
-    bars = pg.locator('#chart .bar').count()
-    check(bars and pg.locator('#chart .pair .col').count() == bars * 2,
-          '月ごとに今年と前年の積み上げが並ぶ  → %d月' % bars)
-    check(pg.locator('#chart .stack.was').count() == bars,
-          '前年の積み上げ（斜線）が月の数だけ出る')
-    check(pg.locator('#chart .stack .seg').count() > bars,
-          '積み上げと同じように部署が段になっている')
+    ms = pg.locator('#chart text.lab').count()
+    check(ms and pg.locator('#chart rect.col').count() > ms,
+          '月ごとに今年と前年の積み上げが並ぶ  → %d月' % ms)
+    check(pg.locator('#chart pattern').count() > 0,
+          '前年の棒が斜線になる')
+    check(pg.locator('#chart line.conn').count() > 0,
+          '今年と前年の段をつなぐ区分線が引かれる  → %d本'
+          % pg.locator('#chart line.conn').count())
+    check(pg.locator('#chart polyline.rate').count() == 0
+          and pg.locator('#chart text.tick2').count() == 0,
+          '前年比較のグラフにも折れ線を出さない')
     lg = pg.locator('#legend').inner_text().replace('\n', ' ')
-    check('2025年' in lg and '斜線' in lg, '凡例に今年と前年が出る  → ' + lg)
+    check('2026' in lg and '2025' in lg and '斜線' in lg,
+          '凡例に今年（塗り）と前年（斜線）が出る  → ' + lg)
     check(pg.locator('#selChartDept').is_visible(), '比べる部署を選べる')
     pg.select_option('#selChartDept', '本社営業部')
     pg.wait_for_timeout(300)
     check('本社営業部' in pg.locator('#chartNote').inner_text(),
           '選んだ部署が見出しに出る  → ' + pg.locator('#chartNote').inner_text())
-    check(pg.locator('#chart .pair .col').count() == bars * 2,
-          '1部署を選ぶと今年と前年の2本組になる')
+    check(0 < pg.locator('#chart rect.col').count() <= ms * 2,
+          '1部署を選ぶと今年と前年の2本だけになる')
     pg.screenshot(path=str(SHOT / '09_グラフ前年比較.png'), full_page=True)
     pg.locator('#pillChart button[data-c=stack]').click()
     pg.wait_for_timeout(300)
-    check(pg.locator('#chart .seg').count() > 0, '積み上げに戻せる')
+    check(pg.locator('#chart rect.col').count() > 0
+          and pg.locator('#chart line.conn').count() > 0, '積み上げに戻せる')
     check(pg.locator('#matrix tbody tr').count() == 6, 'マトリクスが5部署+合計行')
     total = pg.locator('#matrix tbody tr.total td').last.inner_text()
     check('1,874,777' in total, '年間合計 1,874,777 通し  → ' + total.replace('\n', ' '))
     pg.screenshot(path=str(SHOT / '01_年間サマリー.png'), full_page=True)
+
+    # ── 印刷とPDF ──
+    check(pg.locator('#btnPrintTop').is_visible() and pg.locator('#btnPdf').is_visible(),
+          '印刷とPDFで保存のボタンがある')
+    pg.evaluate('setPrintTitle()')
+    check('年間サマリー' in pg.locator('#printTitle').inner_text(),
+          '印刷用の見出しが入る  → ' + pg.locator('#printTitle').inner_text())
+    pg.emulate_media(media='print')
+    check(not pg.locator('header').is_visible()
+          and not pg.locator('nav.tabs').is_visible(),
+          '印刷ではヘッダーとタブを出さない')
+    check(pg.locator('#sum').is_visible() and pg.locator('#printTitle').is_visible(),
+          '印刷でも表と見出しは出る')
+    pg.emulate_media(media='screen')
+
+    # ── 表を Excel で保存できる ──
+    with pg.expect_download(timeout=30000) as dl:
+        pg.locator('#btnCsvYear').click()
+    got = dl.value
+    check(got.suggested_filename.endswith('.xlsx'),
+          'Excelファイルとして保存できる  → ' + got.suggested_filename)
 
     # ── マトリクスの数字から月別明細へジャンプ ──
     pg.locator('#matrix a.jump').first.click()
@@ -120,6 +156,25 @@ with sync_playwright() as pw:
     check(kept.locator('textarea[data-f=trend]').input_value() == '継続（前年並み）'
           and kept.locator('input[data-f=tsu]').input_value() == '12000', '再読込後も入力が残る')
     check(pg.locator('#sumPlan').inner_text() == '12,000', '再読込後も合計に反映される')
+
+    # ── 部署の分け方が変わっても記入欄は見失わない ──
+    moved = pg.evaluate(
+        "(function(){ var k = Object.keys(MEMO)[0], p = k.split('|');"
+        " var n = [p[0], p[1], 'ちがう部署', p[3]].join('|');"
+        " var body = {}; body[k] = null; body[n] = MEMO[k];"
+        " return fetch('/api/memo', {method:'POST',"
+        " headers:{'Content-Type':'application/json'},"
+        " body: JSON.stringify(body)}).then(function(r){return r.ok;}); })()")
+    check(moved, '記入欄の部署名を差し替えられた（確かめのため）')
+    pg.reload()
+    pg.wait_for_selector('#matrix tbody tr')
+    pg.locator('nav.tabs button[data-view=month]').click()
+    pg.select_option('#selMonth', '1')
+    pg.locator('#pillDept button', has_text='全社').click()
+    pg.wait_for_selector('#detail tbody tr')
+    kept2 = pg.locator('#detail tbody tr:not(.total):not(.diff)').first
+    check(kept2.locator('textarea[data-f=trend]').input_value() == '継続（前年並み）',
+          '部署の分け方が変わっても記入欄は残る（管理番号で探し直す）')
 
     # ── 絞り込み ──
     pg.fill('#q', 'アルファ')
@@ -208,12 +263,13 @@ with sync_playwright() as pw:
           '無かったフォルダで注意バナーを出さない')
     pg.screenshot(path=str(SHOT / '04_元ファイル.png'), full_page=True)
 
-    # ── CSV 出力 ──
+    # ── Excel 出力 ──
     pg.locator('nav.tabs button[data-view=month]').click()
     with pg.expect_download() as d:
         pg.click('#btnCsvMonth')
     name = d.value.suggested_filename
-    check(name.endswith('.csv') and '印刷実績' in name, 'CSV出力できる → ' + name)
+    check(name.endswith('.xlsx') and '印刷実績' in name,
+          '月別明細を Excel で保存できる → ' + name)
 
     # ── 年の切替（複数年フォルダ） ──
     pg.locator('nav.tabs button[data-view=year]').click()      # マトリクスを見える状態に

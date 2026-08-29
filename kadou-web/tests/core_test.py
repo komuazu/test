@@ -83,6 +83,106 @@ def check_pick():
         srv.shutdown()
 
 
+def check_xlsx():
+    """画面の表が、そのまま開ける Excel ファイルになるか"""
+    import io                                                    # noqa: PLC0415
+    import zipfile                                               # noqa: PLC0415
+    import xlsx                                                  # noqa: PLC0415
+
+    data = xlsx.build([['部署', '通し数', '前年比'],
+                       ['本社営業部', 12345, '89.9%'],
+                       ['合計', 12345, '89.9%']], '前年との比較')
+    check(data[:2] == b'PK', 'Excelファイル(.xlsx)ができる  → %d バイト' % len(data))
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        names = z.namelist()
+        sh = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+        wbx = z.read('xl/workbook.xml').decode('utf-8')
+    check('xl/styles.xml' in names and 'xl/workbook.xml' in names,
+          '中身が Excel の形になっている')
+    check('<v>12345</v>' in sh, '数値は文字ではなく数値のまま入る')
+    check('s="1"' in sh and 'customWidth' in sh, '見出しの飾りと列幅が付く')
+    check('autoFilter' in sh and 'state="frozen"' in sh,
+          '見出し行の固定とオートフィルタが付く')
+    check('前年との比較' in wbx, 'シート名が付く')
+
+
+def check_shared():
+    """共有モード（社内サーバーに置いたとき）の守りが効いているか
+
+    合い言葉を入れた人だけが見られること、画面から稼動日報フォルダを
+    変えたり選んだりできないことを確かめる。サーバー上の好きなフォルダを
+    読まれてしまわないようにするため。
+    """
+    import threading                                             # noqa: PLC0415
+    import urllib.error                                          # noqa: PLC0415
+    import urllib.request                                        # noqa: PLC0415
+    from functools import partial                                # noqa: PLC0415
+    from http.server import ThreadingHTTPServer                  # noqa: PLC0415
+
+    keep = (server.SHARED, server.PASSWORD)
+    server.SHARED, server.PASSWORD = True, 'あいことば'
+    server.SESSIONS.clear()
+    server.Handler.cfg = server.load_config()
+    port = server.free_port(8795)
+    srv = ThreadingHTTPServer(('127.0.0.1', port), partial(server.Handler))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = 'http://127.0.0.1:%d' % port
+
+    def post(path, body, cookie=None):
+        req = urllib.request.Request(base + path,
+                                     data=json.dumps(body).encode('utf-8'),
+                                     headers={'Content-Type': 'application/json'})
+        if cookie:
+            req.add_header('Cookie', cookie)
+        try:
+            r = urllib.request.urlopen(req)
+            return r.headers, json.loads(r.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            return e.headers, json.loads(e.read().decode('utf-8'))
+
+    try:
+        page = urllib.request.urlopen(base + '/').read().decode('utf-8')
+        check('合い言葉' in page and 'app.js' not in page,
+              '合い言葉を入れるまで中身を見せない')
+        check(post('/api/login', {'password': 'ちがう'})[1]['ok'] is False,
+              '違う合い言葉では入れない')
+        hd, j = post('/api/login', {'password': 'あいことば'})
+        cookie = hd.get('Set-Cookie', '').split(';')[0]
+        check(j['ok'] and cookie.startswith('kadou='), '合い言葉が合えば入れる')
+        page = urllib.request.urlopen(
+            urllib.request.Request(base + '/', headers={'Cookie': cookie})
+        ).read().decode('utf-8')
+        check('app.js' in page, '入ったあとは画面が出る')
+        check(post('/api/pick', {}, cookie)[1]['ok'] is False,
+              '共有のときは「フォルダを選ぶ」を使えない')
+        check(post('/api/memo', {}, None)[1]['ok'] is False,
+              '合い言葉なしでは記入欄も触れない')
+    finally:
+        srv.shutdown()
+        server.SHARED, server.PASSWORD = keep
+        server.SESSIONS.clear()
+
+
+def check_memo(tmp):
+    """記入欄の内容が、アプリのフォルダの外にも控えられるか"""
+    keep = (server.MEMO, server.MEMO_PREV, server.MEMO_HOME)
+    server.MEMO = tmp / 'memo.json'
+    server.MEMO_PREV = tmp / 'memo_前回.json'
+    server.MEMO_HOME = tmp / 'ひかえ' / 'memo.json'
+    try:
+        server.save_memo({'a': {'trend': '継続'}})
+        server.save_memo({'a': {'trend': '継続'}, 'b': {'trend': '増加'}})
+        check(server.MEMO.exists() and server.MEMO_HOME.exists(),
+              '記入欄をアプリのフォルダとユーザーフォルダの両方に書く')
+        check(len(json.loads(server.MEMO_PREV.read_text(encoding='utf-8'))) == 1,
+              '上書きする前の内容も残す（打ち間違いの戻し用）')
+        server.MEMO.unlink()                       # フォルダを入れ替えた状況
+        check(len(server.load_memo()) == 2,
+              'アプリのフォルダ側が無くなっても控えから戻せる')
+    finally:
+        server.MEMO, server.MEMO_PREV, server.MEMO_HOME = keep
+
+
 def main():
     tmp = Path(tempfile.mkdtemp(prefix='kadou_test_'))
     try:
@@ -255,6 +355,11 @@ def main():
 
         # ── 「フォルダを選ぶ」の配線（ダイアログは出さずに差し替えて確かめる） ──
         check_pick()
+
+        # ── Excel 書き出しと、記入欄の控え ──
+        check_xlsx()
+        check_memo(tmp)
+        check_shared()
 
         # ── 元ファイルを変更していないこと ──
         before = sorted((p.name, p.stat().st_size, int(p.stat().st_mtime))

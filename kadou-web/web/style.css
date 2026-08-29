@@ -91,57 +91,33 @@ td.inp textarea:focus,td.inp input:focus{border-color:var(--amber-line); backgro
 td.inp input.num{text-align:right; font-variant-numeric:tabular-nums}
 td.inp.filled{background:#f6eec4}
 
-/* ── グラフ ── */
-.bars{display:flex; align-items:flex-end; gap:10px; height:190px; padding:6px 2px 0; overflow-x:auto}
-.bar{flex:1; min-width:42px; display:flex; flex-direction:column; align-items:center; gap:3px; height:100%}
-.bar .track{width:100%; flex:1; display:flex; flex-direction:column; justify-content:flex-end}
-.bar .stack{width:100%; flex:0 0 auto; max-height:88%; display:flex; flex-direction:column; min-height:2px; border:1px solid #6f7883; border-bottom:0}
-.bar .seg{width:100%} .bar .seg.hq{background:var(--hq)} .bar .seg.tk{background:var(--tk)}
-.bar .seg.ik{background:var(--ik)} .bar .seg.km{background:var(--km)}
-.bar .seg.ot{background:var(--ot)}
-.bar .pair{width:100%; flex:1; display:flex; align-items:flex-end; gap:4px}
-/* 高さ100%を入れないと、中の棒の高さ（％）の基準が決まらず描かれない */
-.bar .pair .col{flex:1; height:100%; display:flex; flex-direction:column;
-  justify-content:flex-end}
-.bar .pair .col b{display:block; width:100%; border:1px solid #6f7883; border-bottom:0}
-.bar .pair .col.now b{background:var(--hq)}
-.bar .pair .col.was b{background:var(--ot)}
-.bar .rate{font-size:10.5px; color:var(--ink); white-space:nowrap}
-
-/* 月ごとに「今年の積み上げ」と「前年の積み上げ」を並べる前年比較。
-   積み上げのグラフと同じ形。前年は同じ色に白い斜線を重ねて区別する。 */
-.bars.deptyoy{gap:16px; height:250px}
-.bars.deptyoy .bar{min-width:78px}
-.bars.deptyoy .pair{gap:3px}
-.bars.deptyoy .pair .col{height:100%}
-.bar .stack.was .seg{background-image:repeating-linear-gradient(45deg,
-  rgba(255,255,255,.92) 0 1.5px, transparent 1.5px 6px)}
-.bar .pair .col b.was{background:repeating-linear-gradient(45deg,
-  rgba(255,255,255,.92) 0 1.5px, var(--hq) 1.5px 6px)}
-.legend .lg{color:var(--sub)}
+/* ── グラフ（Excel の棒グラフと同じ形） ── */
+#chart{overflow-x:auto}
+svg.chart{display:block}
+svg.chart .grid{stroke:#e3e5e8}
+svg.chart .axis{stroke:#b8bdc2}
+svg.chart .base{stroke:#c0504d; stroke-dasharray:4 3; opacity:.7}
+svg.chart .rate{fill:none; stroke:#c0504d; stroke-width:1.8}
+svg.chart .dot{fill:#c0504d}
+svg.chart .tick{fill:var(--sub); font-size:11px}
+svg.chart .tick2{fill:#c0504d; font-size:10.5px}
+svg.chart .lab{fill:var(--ink); font-size:11.5px}
+svg.chart .val{fill:var(--sub); font-size:10px}
+svg.chart .atitle{fill:var(--sub); font-size:11.5px}
+svg.chart .col{stroke:none}
+svg.chart .conn{stroke:#9aa1a8; stroke-width:1}
+.legend{display:flex; gap:16px; font-size:12px; color:var(--ink); margin-top:8px;
+  flex-wrap:wrap; justify-content:center}
+.legend i{display:inline-block; width:11px; height:11px; margin-right:5px;
+  vertical-align:-1px}
+.legend i.ln{background:#c0504d; height:3px; vertical-align:3px}
 .legend i.hatch{background:repeating-linear-gradient(45deg,
-  rgba(255,255,255,.92) 0 1.5px, var(--sub) 1.5px 5px)}
-
-/* 部署ごとに並べる前年比較 */
-.ycharts .yc{margin-bottom:6px}
-.ycharts .yct{font-size:12.5px; font-weight:700; margin:8px 0 0; padding-bottom:3px;
-  border-bottom:1px solid var(--line-s)}
-.ycharts .yct small{font-weight:400; color:var(--sub); margin-left:10px}
-.bars.mini{height:104px; gap:8px}
-.bars.mini .val{display:none}
-.bars.mini .lab{font-size:10.5px}
+  #fff 0 1.5px, var(--sub) 1.5px 5px)}
+.legend .lg{color:var(--sub)}
 
 /* 前年より減った数字は赤、増えた数字は太字 */
 .dn{color:var(--bad)}
 .up{font-weight:700}
-.bar .lab{font-size:11px; color:var(--sub); white-space:nowrap}
-.bar .val{font-size:10.5px; color:var(--ink); font-variant-numeric:tabular-nums; white-space:nowrap}
-.legend{display:flex; gap:16px; font-size:12px; color:var(--sub); margin-top:6px; flex-wrap:wrap}
-.legend i{display:inline-block; width:11px; height:11px; border:1px solid #6f7883; margin-right:5px; vertical-align:-1px}
-.legend i.hq{background:var(--hq)} .legend i.tk{background:var(--tk)}
-.legend i.ik{background:var(--ik)} .legend i.km{background:var(--km)}
-.legend i.now{background:var(--hq)} .legend i.was{background:var(--ot)}
-.legend i.ot{background:var(--ot)}
 
 /* ── 操作列 ── */
 .toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px}
@@ -179,11 +155,28 @@ dialog .df{padding:0 16px 16px; display:flex; gap:8px; justify-content:flex-end}
 dialog .df button{border-radius:2px; padding:6px 16px; cursor:pointer; border:1px solid var(--line); background:#fff}
 dialog .df button.pri{background:var(--navy); color:#fff; border-color:var(--navy)}
 
+/* 印刷したときだけ出る見出し */
+.printtitle{display:none}
+
 @media print{
-  header,nav.tabs,.toolbar{display:none}
-  body{background:#fff}
-  .card{border:0; padding:0}
+  header,nav.tabs,.toolbar,#warns,.note{display:none}
+  body{background:#fff; font-size:10pt}
+  main{padding:0; max-width:none; margin:0}
+  .printtitle{display:block; font-size:12pt; font-weight:700; margin:0 0 6mm;
+    padding-bottom:2mm; border-bottom:1px solid #333}
+  .printtitle small{font-weight:400; font-size:9.5pt; color:#333; margin-left:10px}
+  .card{border:0; padding:0; margin:0 0 8mm}
+  .card > h2{font-size:10.5pt; border-bottom:1px solid #999; padding-bottom:2px}
+  table{font-size:8.5pt}
+  thead{display:table-header-group}       /* ページをまたぐとき見出しを繰り返す */
+  tr{break-inside:avoid; page-break-inside:avoid}
   thead th{position:static}
+  .scroll{overflow:visible}
+  svg.chart{width:100%; height:auto}
+  .legend{justify-content:flex-start}
+  /* 見出しの色や棒の色を、そのまま印刷する */
+  *{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+  @page{size:A4 landscape; margin:10mm}
 }
 
 /* 日報の元の行（ドリルダウン） */

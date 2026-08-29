@@ -15,6 +15,8 @@
   <span class="meta" id="meta"></span>
   <span class="spacer"></span>
   <span class="saved" id="saved">保存しました</span>
+  <button id="btnPrintTop" title="いま開いている画面をそのまま印刷します">印刷</button>
+  <button id="btnPdf" title="印刷画面で「PDFとして保存」を選ぶとPDFになります">PDFで保存</button>
   <button id="btnRebuild" title="稼動日報フォルダを読み直します">データ更新</button>
   <button id="btnSetting" title="フォルダと対象年の設定">設定</button>
 </header>
@@ -28,6 +30,8 @@
 </nav>
 
 <main>
+  <!-- 印刷したときだけ出る見出し（画面には出ない） -->
+  <div class="printtitle" id="printTitle"></div>
   <div id="warns"></div>
 
   <!-- ── 年間サマリー ── -->
@@ -40,7 +44,7 @@
     <div class="card" id="cmpYearCard">
       <h2>前年との比較 <small id="cmpNote"></small></h2>
       <div class="toolbar">
-        <button class="btn" id="btnCsvCmp">この表をCSVで保存</button>
+        <button class="btn" id="btnCsvCmp">この表をExcelで保存</button>
       </div>
       <div class="scroll"><table id="cmpSum"></table></div>
       <p class="note">前年は<b>同じ月まで</b>で比べています。年の途中までしか
@@ -50,7 +54,7 @@
     <div class="card" id="cmpMonthCard">
       <h2>月別 前年比 <small>部署ごと。上段=前年比／下段=増減（通し数）</small></h2>
       <div class="toolbar">
-        <button class="btn" id="btnCsvCmpM">この表をCSVで保存</button>
+        <button class="btn" id="btnCsvCmpM">この表をExcelで保存</button>
       </div>
       <div class="scroll"><table id="cmpMonth"></table></div>
     </div>
@@ -71,7 +75,7 @@
     <div class="card">
       <h2>月別 × 部署別 <small>上段=通し数／下段=件数（管理番号ベース）</small></h2>
       <div class="toolbar">
-        <button class="btn" id="btnCsvYear">この表をCSVで保存</button>
+        <button class="btn" id="btnCsvYear">この表をExcelで保存</button>
       </div>
       <div class="scroll"><table id="matrix"></table></div>
       <p class="note">数字をクリックすると、その月・その部署の明細に移動します。</p>
@@ -85,7 +89,7 @@
       <span class="pills" id="pillDept"></span>
       <input type="search" id="q" placeholder="管理番号・得意先・品名で絞り込み">
       <span class="grow"></span>
-      <button class="btn" id="btnCsvMonth">CSVで保存</button>
+      <button class="btn" id="btnCsvMonth">Excelで保存</button>
       <button class="btn" id="btnPrint">印刷</button>
     </div>
     <div class="card">
@@ -107,7 +111,7 @@
       <span class="pills" id="pillDeptC"></span>
       <input type="search" id="qc" placeholder="得意先名で絞り込み">
       <span class="grow"></span>
-      <button class="btn" id="btnCsvClient">CSVで保存</button>
+      <button class="btn" id="btnCsvClient">Excelで保存</button>
     </div>
     <div class="card">
       <h2 id="cTitle"></h2>
@@ -122,7 +126,7 @@
       <select id="selMachineR"></select>
       <input type="search" id="qr" placeholder="管理番号・得意先・品名で絞り込み">
       <span class="grow"></span>
-      <button class="btn" id="btnCsvRaw">CSVで保存</button>
+      <button class="btn" id="btnCsvRaw">Excelで保存</button>
     </div>
     <div class="card">
       <h2 id="rTitle"></h2>
@@ -167,6 +171,9 @@
       「保存して読み直す」を押すと、このフォルダの .xls を読み直します。
       読み込みは一時フォルダへコピーしてから行うため、元のExcelファイルには一切触れません。</p>
     <p class="note" id="altNote"></p>
+    <p class="note" id="sharedNote" style="display:none">
+      このアプリは社内サーバーで共有しています。読み込むフォルダは
+      サーバー側で決めているため、この画面からは変えられません。</p>
   </div>
   <div class="df">
     <button id="dlgCancel">キャンセル</button>

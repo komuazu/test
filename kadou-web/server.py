@@ -17,6 +17,7 @@
 import argparse
 import json
 import os
+import secrets
 import socket
 import sys
 import threading
@@ -30,6 +31,9 @@ HERE = Path(__file__).resolve().parent
 WEB = HERE / 'web'
 CONFIG = HERE / 'config.json'
 MEMO = HERE / 'memo.json'
+MEMO_PREV = HERE / 'memo_前回.json'
+# アプリのフォルダを入れ替えても記入欄が消えないよう、ユーザーフォルダにも控える
+MEMO_HOME = Path(os.environ.get('APPDATA') or Path.home()) / 'kadou-web' / 'memo.json'
 MANIFEST = WEB / 'years.json'
 
 # 稼動日報の置き場所。実在するフォルダを全部読み、年ごとにまとめる。
@@ -84,27 +88,94 @@ def save_config(cfg):
     CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
+# ── 共有モード（社内サーバーに置いて、みんなで使うとき） ──
+# 自分のPCで使うとき（既定）は、これまでどおり 127.0.0.1 だけで待ち受け、
+# フォルダの指定も自由にできる。
+# --host で外から届くようにしたときは自動で共有モードになり、
+#   ・合い言葉（パスワード）を求める
+#   ・稼動日報フォルダの変更と「フォルダを選ぶ」を止める
+# 誰でもサーバー上の好きなフォルダを読めてしまわないようにするため。
+SHARED = False
+PASSWORD = ''
+SESSIONS = set()
+PWFILE = HERE / 'password.txt'
+
+
+def load_password(arg=None):
+    """合い言葉を、指定・環境変数・password.txt の順に探す"""
+    if arg:
+        return arg.strip()
+    env = os.environ.get('KADOU_PASSWORD')
+    if env:
+        return env.strip()
+    if PWFILE.exists():
+        return PWFILE.read_text(encoding='utf-8').strip()
+    return ''
+
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
 def load_memo():
-    if MEMO.exists():
-        try:
-            return json.loads(MEMO.read_text(encoding='utf-8'))
-        except Exception:                                        # noqa: BLE001
-            print('memo.json を読めませんでした。空で開始します。')
-    return {}
+    """記入欄の内容を読む。中身の多い方を採る
+
+    アプリのフォルダ（memo.json）と、PCのユーザーフォルダ（MEMO_HOME）の両方に
+    同じものを書いている。アプリを入れ替えたり作り直したりしてフォルダ側が
+    無くなっても、ユーザーフォルダ側から戻せるようにするため。
+    """
+    a, b = read_json(MEMO), read_json(MEMO_HOME)
+    if a is None and b is None:
+        if MEMO.exists() or MEMO_HOME.exists():
+            print('記入欄の保存ファイルを読めませんでした。空で開始します。')
+        return {}
+    if a is None:
+        print('記入欄の内容を %s から戻しました。' % MEMO_HOME)
+        return b
+    if b is not None and len(b) > len(a):
+        print('記入欄の内容を %s から戻しました（%d件）。' % (MEMO_HOME, len(b)))
+        return b
+    return a
 
 
 _memo_lock = threading.Lock()
 
 
+def write_atomic(path, text):
+    """書きかけで壊れないよう、一時ファイルに書いてから置き換える"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(text, encoding='utf-8')
+    os.replace(tmp, path)
+
+
 def save_memo(memo):
-    """memo.json を安全に置き換える（書きかけで壊れないよう一時ファイル経由）"""
+    """記入欄の内容を保存する
+
+    消えると手入力がやり直しになるため、3か所に残す。
+      ・memo.json           … アプリのフォルダ
+      ・memo_前回.json      … 上書きする前の内容（打ち間違いの戻し用）
+      ・ユーザーフォルダ     … アプリを入れ替えても残る控え
+    """
     with _memo_lock:
-        tmp = MEMO.with_suffix('.json.tmp')
-        tmp.write_text(json.dumps(memo, ensure_ascii=False, indent=1), encoding='utf-8')
-        os.replace(tmp, MEMO)
+        body = json.dumps(memo, ensure_ascii=False, indent=1)
+        if MEMO.exists():
+            try:
+                write_atomic(MEMO_PREV, MEMO.read_text(encoding='utf-8'))
+            except OSError:
+                pass
+        write_atomic(MEMO, body)
+        try:
+            write_atomic(MEMO_HOME, body)
+        except OSError as e:                                     # noqa: BLE001
+            print('控えを %s に書けませんでした: %s' % (MEMO_HOME, e))
 
 
 _pick_lock = threading.Lock()
+_build_lock = threading.Lock()   # 読み込みは一度に1つだけ
 
 
 def pick_folder(initial=None):
@@ -174,6 +245,40 @@ def rebuild(cfg):
     return build.build(src_candidates(cfg), int(year) if year else None, WEB)
 
 
+LOGIN_HTML = """<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>稼動日報 印刷実績ビューア</title>
+<style>
+ body{font-family:"Yu Gothic UI","Hiragino Kaku Gothic ProN",system-ui,sans-serif;
+   background:#f1f1ef; color:#1a1a1a; display:flex; min-height:100vh; margin:0;
+   align-items:center; justify-content:center}
+ form{background:#fff; border:1px solid #dcdfe3; padding:28px 26px; min-width:280px}
+ h1{font-size:15px; margin:0 0 18px}
+ input{width:100%; box-sizing:border-box; font-size:16px; padding:9px 10px;
+   border:1px solid #9ba1a8; border-radius:2px}
+ button{margin-top:14px; width:100%; font-size:15px; padding:9px; cursor:pointer;
+   background:#3a4450; color:#fff; border:0; border-radius:2px}
+ p{color:#992222; font-size:12.5px; margin:12px 0 0; min-height:1em}
+</style></head><body>
+<form onsubmit="go(event)">
+  <h1>稼動日報 印刷実績ビューア</h1>
+  <input id="p" type="password" placeholder="合い言葉" autofocus autocomplete="current-password">
+  <button type="submit">開く</button>
+  <p id="m">{msg}</p>
+</form>
+<script>
+function go(e){
+  e.preventDefault();
+  fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({password:document.getElementById('p').value})})
+   .then(function(r){return r.json();})
+   .then(function(j){ if(j.ok){ location.reload(); }
+     else { document.getElementById('m').textContent = j.error || '入れませんでした'; } })
+   .catch(function(){ document.getElementById('m').textContent='つながりませんでした'; });
+}
+</script></body></html>"""
+
+
 class Handler(SimpleHTTPRequestHandler):
     cfg = None
 
@@ -209,16 +314,73 @@ class Handler(SimpleHTTPRequestHandler):
         n = int(self.headers.get('Content-Length') or 0)
         return json.loads(self.rfile.read(n) or b'{}')
 
+    # ── 合い言葉 ──
+    def token(self):
+        for part in (self.headers.get('Cookie') or '').split(';'):
+            k, _, v = part.strip().partition('=')
+            if k == 'kadou':
+                return v
+        return ''
+
+    def allowed(self):
+        """共有モードでは、合い言葉を入れた人だけが中を見られる"""
+        return (not SHARED) or (not PASSWORD) or (self.token() in SESSIONS)
+
+    def send_login(self, msg=''):
+        body = LOGIN_HTML.replace('{msg}', msg).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_bytes(self, data, ctype, gzipped=False):
+        self.send_response(200)
+        self.send_header('Content-Type', ctype)
+        if gzipped:
+            self.send_header('Content-Encoding', 'gzip')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     # ── API ──
     def do_GET(self):
+        if not self.allowed():
+            return self.send_login()
         if self.path.startswith('/api/memo'):
             return self._json(load_memo())
         if self.path.startswith('/api/config'):
-            return self._json(Handler.cfg)
+            return self._json(dict(Handler.cfg, shared=SHARED))
+        # data_<年>.json は10MB前後あるので、縮めて送る（社内LANでも効く）
+        name = self.path.split('?')[0].lstrip('/')
+        if name.endswith('.json') and 'gzip' in (self.headers.get('Accept-Encoding') or ''):
+            f = Path(self.directory) / name
+            if f.is_file():
+                import gzip                                       # noqa: PLC0415
+                return self.send_bytes(gzip.compress(f.read_bytes(), 6),
+                                       'application/json; charset=utf-8', True)
         return super().do_GET()
 
     def do_POST(self):
         try:
+            if self.path.startswith('/api/login'):
+                if self._body().get('password', '') == PASSWORD and PASSWORD:
+                    tok = secrets.token_urlsafe(24)
+                    SESSIONS.add(tok)
+                    body = json.dumps({'ok': True}).encode('utf-8')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.send_header('Set-Cookie',
+                                     'kadou=%s; Path=/; HttpOnly; SameSite=Lax' % tok)
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                return self._json({'ok': False, 'error': '合い言葉が違います。'})
+
+            if not self.allowed():
+                return self._json({'ok': False, 'error': 'もう一度開き直してください。'}, 401)
+
             if self.path.startswith('/api/memo'):
                 # {key: {trend, plan, tsu}} を差分マージする
                 memo = load_memo()
@@ -230,7 +392,26 @@ class Handler(SimpleHTTPRequestHandler):
                 save_memo(memo)
                 return self._json({'ok': True, 'count': len(memo)})
 
+            if self.path.startswith('/api/xlsx'):
+                # 画面の表をそのまま Excel ファイルにして返す
+                b = self._body()
+                import xlsx                                      # noqa: PLC0415
+                data = xlsx.build(b.get('rows') or [],
+                                  b.get('sheet') or '集計')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/vnd.openxmlformats-'
+                                                 'officedocument.spreadsheetml.sheet')
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Content-Disposition', 'attachment; filename="table.xlsx"')
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
             if self.path.startswith('/api/pick'):
+                if SHARED:
+                    return self._json({'ok': False,
+                                       'error': '共有で使っているときは、フォルダを'
+                                                'この画面から選べません。'})
                 # ダイアログは1つずつ（2つ開くと閉じられなくなるため）
                 if not _pick_lock.acquire(blocking=False):
                     return self._json({'ok': False,
@@ -248,6 +429,15 @@ class Handler(SimpleHTTPRequestHandler):
 
             if self.path.startswith('/api/rebuild'):
                 b = self._body()
+                if SHARED:
+                    # 共有のときは、読むフォルダはサーバーの設定で固定する。
+                    # 画面から変えられると、サーバー上の好きなフォルダを
+                    # 読めてしまうため。
+                    b = {}
+                if not _build_lock.acquire(blocking=False):
+                    return self._json({'ok': False,
+                                       'error': 'いま読み込み中です。'
+                                                '終わるまでお待ちください。'})
                 if b.get('src') is not None:
                     # 画面からは1行1フォルダで来る
                     v = b['src']
@@ -260,7 +450,10 @@ class Handler(SimpleHTTPRequestHandler):
                 if 'year' in b:
                     Handler.cfg['year'] = int(b['year']) if str(b['year']).strip() else None
                 save_config(Handler.cfg)
-                m = rebuild(Handler.cfg)
+                try:
+                    m = rebuild(Handler.cfg)
+                finally:
+                    _build_lock.release()
                 return self._json({'ok': True,
                                    'generated': m['generated'],
                                    'years': [y['year'] for y in m['years']],
@@ -270,6 +463,16 @@ class Handler(SimpleHTTPRequestHandler):
             traceback.print_exc()
             return self._json({'ok': False, 'error': str(e)}, 500)
         return self._json({'ok': False, 'error': 'unknown endpoint'}, 404)
+
+
+def my_ip():
+    """ほかの端末から届くアドレスを調べる（案内に出すだけ）"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s2:
+            s2.connect(('8.8.8.8', 80))          # つながらなくてもよい
+            return s2.getsockname()[0]
+    except OSError:
+        return socket.gethostname()
 
 
 def free_port(port):
@@ -289,7 +492,23 @@ def main():
     p.add_argument('--port', type=int, help='ポート番号')
     p.add_argument('--no-build', action='store_true', help='読み直さず前回のデータで起動')
     p.add_argument('--no-browser', action='store_true', help='ブラウザを自動で開かない')
+    p.add_argument('--host', default='127.0.0.1',
+                   help='待ち受けるアドレス（社内で共有するときは 0.0.0.0）')
+    p.add_argument('--password', help='共有するときの合い言葉'
+                                      '（省略時は KADOU_PASSWORD か password.txt）')
     a = p.parse_args()
+
+    # 自分のPC以外から届くようにしたときは、自動で共有モードにする
+    global SHARED, PASSWORD                                      # noqa: PLW0603
+    SHARED = a.host not in ('127.0.0.1', 'localhost')
+    PASSWORD = load_password(a.password)
+    if SHARED and not PASSWORD:
+        raise SystemExit(
+            '合い言葉が設定されていないため、共有で起動できません。\n'
+            '  次のどれかで決めてください。\n'
+            '    ・password.txt に1行で書く（%s）\n'
+            '    ・環境変数 KADOU_PASSWORD に入れる\n'
+            '    ・--password で渡す' % PWFILE)
     for k in ('src', 'year', 'port'):
         if getattr(a, k):
             cfg[k] = getattr(a, k)
@@ -311,13 +530,23 @@ def main():
             print('  [エラー] 読み込みに失敗しました: %s' % e)
 
     Handler.cfg = cfg
-    port = free_port(int(cfg['port']))
+    port = free_port(int(cfg['port'])) if not SHARED else int(cfg['port'])
     url = 'http://127.0.0.1:%d/' % port
-    srv = ThreadingHTTPServer(('127.0.0.1', port), partial(Handler))
+    try:
+        srv = ThreadingHTTPServer((a.host, port), partial(Handler))
+    except OSError as e:
+        raise SystemExit(
+            '%d番のポートを使えませんでした（%s）。\n'
+            '  ・すでにこのアプリが動いていないか確かめてください\n'
+            '  ・別の番号にするには config.json の "port" を変えてください'
+            % (port, e))
     print('=' * 60)
     print('  稼動日報 印刷実績ビューア%s'
           % ('（%d年）' % cfg['year'] if cfg.get('year') else ''))
     print('  ブラウザで開いてください →  %s' % url)
+    if SHARED:
+        print('  ほかの端末からは →  http://%s:%d/' % (my_ip(), port))
+        print('  合い言葉を入れると開きます（フォルダの変更はできません）')
     print('  終了するには この画面で Ctrl+C を押してください')
     print('=' * 60)
     if not a.no_browser:
