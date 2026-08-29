@@ -1,155 +1,157 @@
-/* 稼動日報 印刷実績ビューア  ── 配色は出力Excelに合わせた紺／山吹 */
+/* 稼動日報 印刷実績ビューア  ── 社内の集計表に近い見た目（罫線と余白で区切る） */
 :root{
-  --navy:#1f3864; --navy-l:#2e4f8f; --navy-x:#eef2fa;
-  --amber:#bf8f00; --amber-bg:#fff8dc; --amber-line:#e6c65c;
-  --ink:#1b1f2a; --sub:#5b6478; --line:#d9dee8; --line-s:#eceff5;
-  --bg:#f4f6fa; --card:#ffffff;
-  --ok:#1e7a4d; --warn:#b45309; --bad:#b91c1c;
-  --hq:#2563eb; --tk:#0f9488; --ik:#a855c7;
+  --navy:#3a4450; --navy-l:#4c5866; --navy-x:#eceef1;
+  --amber:#8a6a00; --amber-bg:#fbf6e2; --amber-line:#d6c485;
+  --ink:#1a1a1a; --sub:#5f6469; --line:#9ba1a8; --line-s:#dcdfe3;
+  --bg:#f1f1ef; --card:#ffffff; --th:#e7e9ec;
+  --ok:#1e6b46; --warn:#7a5313; --bad:#992222;
+  --hq:#404b58; --tk:#7a848f; --ik:#b3bac1;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{
   font-family:"Yu Gothic UI","Meiryo","Hiragino Kaku Gothic ProN",system-ui,sans-serif;
-  background:var(--bg); color:var(--ink); font-size:14px; line-height:1.6;
+  background:var(--bg); color:var(--ink); font-size:13.5px; line-height:1.55;
 }
 button,input,select,textarea{font:inherit;color:inherit}
 
 /* ── ヘッダ ── */
 header{
-  background:linear-gradient(180deg,var(--navy) 0%,var(--navy-l) 100%);
-  color:#fff; padding:14px 22px; display:flex; align-items:center; gap:18px;
-  flex-wrap:wrap; position:sticky; top:0; z-index:50;
-  box-shadow:0 2px 10px rgba(31,56,100,.25);
+  background:var(--navy); color:#fff; padding:9px 20px;
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  position:sticky; top:0; z-index:50; border-bottom:1px solid #26303a;
 }
-header h1{margin:0;font-size:18px;font-weight:700;letter-spacing:.02em}
-header .meta{font-size:11.5px;opacity:.85;margin-left:-8px}
+header h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.03em}
+header .meta{font-size:11.5px;opacity:.8;margin-left:-6px}
 header .spacer{flex:1}
 header select{
-  background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.4);
-  border-radius:6px; padding:5px 10px; font-size:13px; font-weight:700; cursor:pointer;
+  background:#fff; color:var(--ink); border:1px solid #8f98a3;
+  border-radius:2px; padding:3px 8px; font-size:12.5px; cursor:pointer;
 }
-header select option{background:#fff; color:var(--ink); font-weight:400}
 header button{
-  background:rgba(255,255,255,.12); color:#fff; border:1px solid rgba(255,255,255,.35);
-  border-radius:6px; padding:6px 13px; cursor:pointer; font-size:12.5px;
+  background:transparent; color:#fff; border:1px solid rgba(255,255,255,.45);
+  border-radius:2px; padding:4px 12px; cursor:pointer; font-size:12.5px;
 }
-header button:hover{background:rgba(255,255,255,.24)}
+header button:hover{background:rgba(255,255,255,.14)}
 
 /* ── タブ ── */
-nav.tabs{display:flex; gap:2px; background:var(--navy-l); padding:0 22px; position:sticky; top:57px; z-index:49}
-nav.tabs button{
-  background:transparent; border:0; color:#cdd8ec; padding:9px 20px; cursor:pointer;
-  font-size:13.5px; border-bottom:3px solid transparent;
+nav.tabs{
+  display:flex; gap:0; background:#e3e5e8; padding:0 20px;
+  position:sticky; top:41px; z-index:49; border-bottom:1px solid var(--line);
 }
-nav.tabs button.on{color:#fff; font-weight:700; border-bottom-color:#ffd24d; background:rgba(255,255,255,.08)}
+nav.tabs button{
+  background:transparent; border:0; color:var(--sub); padding:7px 18px; cursor:pointer;
+  font-size:13px; border-bottom:2px solid transparent;
+}
+nav.tabs button:hover{color:var(--ink)}
+nav.tabs button.on{color:var(--ink); font-weight:700; border-bottom-color:var(--navy); background:#fff}
 
-main{padding:20px 22px 60px; max-width:1560px; margin:0 auto}
+main{padding:16px 20px 60px; max-width:1560px; margin:0 auto}
 section.view{display:none}
 section.view.on{display:block}
 
-.card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:18px}
-.card > h2{margin:0 0 12px; font-size:15px; color:var(--navy); border-left:4px solid var(--navy); padding-left:9px}
+.card{background:var(--card); border:1px solid var(--line-s); padding:12px 14px 14px; margin-bottom:14px}
+.card > h2{
+  margin:0 0 10px; font-size:13.5px; font-weight:700; color:var(--ink);
+  border-bottom:1px solid var(--line); padding-bottom:5px;
+}
 .card > h2 small{font-weight:400; color:var(--sub); font-size:11.5px; margin-left:8px}
-
-/* ── KPI ── */
-.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-bottom:18px}
-.kpi{background:var(--card); border:1px solid var(--line); border-top:3px solid var(--navy); border-radius:8px; padding:12px 15px}
-.kpi .k{font-size:11.5px; color:var(--sub)}
-.kpi .v{font-size:25px; font-weight:700; color:var(--navy); font-variant-numeric:tabular-nums; line-height:1.25}
-.kpi .u{font-size:12px; font-weight:400; color:var(--sub); margin-left:3px}
-.kpi.hq{border-top-color:var(--hq)} .kpi.hq .v{color:var(--hq)}
-.kpi.tk{border-top-color:var(--tk)} .kpi.tk .v{color:var(--tk)}
-.kpi.ik{border-top-color:var(--ik)} .kpi.ik .v{color:var(--ik)}
 
 /* ── 表 ── */
 .scroll{overflow:auto; max-width:100%}
 table{border-collapse:collapse; width:100%; font-size:12.5px}
-th,td{border:1px solid var(--line); padding:5px 8px; vertical-align:top}
+th,td{border:1px solid var(--line); padding:4px 8px; vertical-align:top}
 thead th{
-  background:var(--navy); color:#fff; font-weight:700; text-align:center;
-  position:sticky; top:0; z-index:2; border-color:var(--navy-l); white-space:nowrap;
+  background:var(--th); color:var(--ink); font-weight:700; text-align:center;
+  position:sticky; top:0; z-index:2; white-space:nowrap;
 }
-thead th.inp{background:var(--amber)}
-tbody tr:nth-child(even) td{background:#fafbfe}
+thead th.inp{background:var(--amber-bg); color:var(--amber)}
+tbody tr:nth-child(even) td{background:#fafafa}
 tbody tr:hover td{background:var(--navy-x)}
 td.num,th.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
 td.c,th.c{text-align:center; white-space:nowrap}
-td.multi{background:#fff9db !important}
-tr.total td{background:#fff2cc !important; font-weight:700}
-tr.diff  td{background:#fce4d6 !important; font-weight:700}
-.badge{display:inline-block; background:var(--navy); color:#fff; border-radius:9px; padding:0 6px; font-size:10px; margin-left:5px; cursor:help}
+th.rh{background:var(--th); text-align:left; white-space:nowrap; font-weight:600}
+th.rh small{font-weight:400; color:var(--sub); margin-left:4px}
+td.multi{background:#fbf6e2 !important}
+tr.total td,tr.total th{background:#eeeeea !important; font-weight:700; border-top:2px solid var(--line)}
+tr.diff  td{background:#f6e9e3 !important; font-weight:700}
+.badge{display:inline-block; background:var(--navy); color:#fff; padding:0 5px; font-size:10px; margin-left:5px; cursor:help}
+
+/* 年間 集計（先頭の表） */
+#sum{width:auto; min-width:520px}
+#sum td,#sum th{padding:5px 14px}
 
 /* 手入力セル */
 td.inp{background:var(--amber-bg); padding:2px}
 td.inp textarea,td.inp input{
-  width:100%; border:1px solid transparent; background:transparent; color:#0000ff;
-  padding:3px 5px; border-radius:4px; resize:vertical; font-size:12.5px; min-height:26px;
+  width:100%; border:1px solid transparent; background:transparent; color:#123a8a;
+  padding:3px 5px; resize:vertical; font-size:12.5px; min-height:26px;
 }
 td.inp textarea:focus,td.inp input:focus{border-color:var(--amber-line); background:#fff; outline:none}
 td.inp input.num{text-align:right; font-variant-numeric:tabular-nums}
-td.inp.filled{background:#fff3b0}
+td.inp.filled{background:#f6eec4}
 
 /* ── グラフ ── */
-.bars{display:flex; align-items:flex-end; gap:10px; height:210px; padding:8px 4px 0; overflow-x:auto}
-.bar{flex:1; min-width:42px; display:flex; flex-direction:column; align-items:center; gap:4px; height:100%}
+.bars{display:flex; align-items:flex-end; gap:10px; height:190px; padding:6px 2px 0; overflow-x:auto}
+.bar{flex:1; min-width:42px; display:flex; flex-direction:column; align-items:center; gap:3px; height:100%}
 .bar .track{width:100%; flex:1; display:flex; flex-direction:column; justify-content:flex-end}
-.bar .stack{width:100%; flex:0 0 auto; max-height:88%; display:flex; flex-direction:column; border-radius:4px 4px 0 0; overflow:hidden; min-height:2px}
+.bar .stack{width:100%; flex:0 0 auto; max-height:88%; display:flex; flex-direction:column; min-height:2px; border:1px solid #6f7883; border-bottom:0}
 .bar .seg{width:100%} .bar .seg.hq{background:var(--hq)} .bar .seg.tk{background:var(--tk)} .bar .seg.ik{background:var(--ik)}
 .bar .lab{font-size:11px; color:var(--sub); white-space:nowrap}
-.bar .val{font-size:10.5px; color:var(--navy); font-variant-numeric:tabular-nums; white-space:nowrap}
+.bar .val{font-size:10.5px; color:var(--ink); font-variant-numeric:tabular-nums; white-space:nowrap}
 .legend{display:flex; gap:16px; font-size:12px; color:var(--sub); margin-top:6px; flex-wrap:wrap}
-.legend i{display:inline-block; width:11px; height:11px; border-radius:2px; margin-right:5px; vertical-align:-1px}
+.legend i{display:inline-block; width:11px; height:11px; border:1px solid #6f7883; margin-right:5px; vertical-align:-1px}
 .legend i.hq{background:var(--hq)} .legend i.tk{background:var(--tk)} .legend i.ik{background:var(--ik)}
 
 /* ── 操作列 ── */
-.toolbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px}
-.toolbar select,.toolbar input[type=search]{border:1px solid var(--line); border-radius:6px; padding:6px 10px; background:#fff}
+.toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px}
+.toolbar select,.toolbar input[type=search]{border:1px solid var(--line); border-radius:2px; padding:4px 8px; background:#fff}
 .toolbar input[type=search]{min-width:230px}
-.toolbar .btn{border:1px solid var(--navy); color:var(--navy); background:#fff; border-radius:6px; padding:6px 13px; cursor:pointer; font-size:12.5px}
+.toolbar .btn{border:1px solid var(--line); color:var(--ink); background:#fff; border-radius:2px; padding:4px 12px; cursor:pointer; font-size:12.5px}
 .toolbar .btn:hover{background:var(--navy-x)}
-.pills{display:flex; gap:6px; flex-wrap:wrap}
-.pills button{border:1px solid var(--line); background:#fff; border-radius:16px; padding:5px 15px; cursor:pointer; font-size:12.5px}
+.pills{display:flex; gap:0; flex-wrap:wrap}
+.pills button{border:1px solid var(--line); border-right:0; background:#fff; padding:4px 14px; cursor:pointer; font-size:12.5px}
+.pills button:last-child{border-right:1px solid var(--line)}
 .pills button.on{background:var(--navy); color:#fff; border-color:var(--navy); font-weight:700}
 .grow{flex:1}
-.saved{font-size:12px; color:#8ef0bd; font-weight:700; opacity:0; transition:opacity .25s}
+.saved{font-size:12px; color:#d8e8d8; font-weight:700; opacity:0; transition:opacity .25s}
 .saved.on{opacity:1}
 
 .note{font-size:11.5px; color:var(--sub); margin:8px 0 0}
-.warn{background:#fff7ed; border:1px solid #fed7aa; color:var(--warn); border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:12.5px}
-.warn b{color:#9a3412}
+.warn{background:#fbf6e2; border:1px solid var(--amber-line); color:var(--warn); padding:8px 12px; margin-bottom:12px; font-size:12.5px}
+.warn b{color:#5c3d0a}
 .empty{padding:40px; text-align:center; color:var(--sub)}
 
-dialog{border:1px solid var(--line); border-radius:10px; padding:0; max-width:620px; width:92%}
-dialog::backdrop{background:rgba(20,28,45,.45)}
-dialog .dh{background:var(--navy); color:#fff; padding:11px 18px; font-weight:700}
-dialog .db{padding:18px}
+dialog{border:1px solid var(--line); padding:0; max-width:620px; width:92%}
+dialog::backdrop{background:rgba(26,26,26,.4)}
+dialog .dh{background:var(--navy); color:#fff; padding:9px 16px; font-weight:700; font-size:13.5px}
+dialog .db{padding:16px}
 dialog label{display:block; font-size:12px; color:var(--sub); margin:12px 0 4px}
-dialog input,dialog textarea{width:100%; border:1px solid var(--line); border-radius:6px;
-  padding:7px 10px; font-family:Consolas,'Courier New',monospace; font-size:12px; resize:vertical}
+dialog input,dialog textarea{width:100%; border:1px solid var(--line); border-radius:2px;
+  padding:6px 9px; font-family:Consolas,'Courier New',monospace; font-size:12px; resize:vertical}
 dialog .pick{display:flex; align-items:center; gap:10px; margin-top:8px}
-dialog .pick button{border:1px solid var(--line); background:#fff; border-radius:6px;
-  padding:6px 14px; cursor:pointer; white-space:nowrap}
-dialog .pick button:hover{background:#f2f5fa}
-dialog .pick button:disabled{color:var(--sub); cursor:default; background:#f6f7f9}
+dialog .pick button{border:1px solid var(--line); background:#fff; border-radius:2px;
+  padding:5px 13px; cursor:pointer; white-space:nowrap}
+dialog .pick button:hover{background:var(--navy-x)}
+dialog .pick button:disabled{color:var(--sub); cursor:default; background:#f4f4f4}
 dialog .pick .note{margin:0}
-dialog .df{padding:0 18px 18px; display:flex; gap:10px; justify-content:flex-end}
-dialog .df button{border-radius:6px; padding:7px 18px; cursor:pointer; border:1px solid var(--line); background:#fff}
+dialog .df{padding:0 16px 16px; display:flex; gap:8px; justify-content:flex-end}
+dialog .df button{border-radius:2px; padding:6px 16px; cursor:pointer; border:1px solid var(--line); background:#fff}
 dialog .df button.pri{background:var(--navy); color:#fff; border-color:var(--navy)}
 
 @media print{
-  header,nav.tabs,.toolbar,.kpis{display:none}
+  header,nav.tabs,.toolbar{display:none}
   body{background:#fff}
   .card{border:0; padding:0}
   thead th{position:static}
 }
 
 /* 日報の元の行（ドリルダウン） */
-tr.sub > td{background:#f2f5fb !important; padding:0}
-.subwrap{padding:10px 14px}
-.subttl{font-size:11.5px; color:var(--navy); font-weight:700; margin-bottom:6px}
+tr.sub > td{background:#f4f5f6 !important; padding:0}
+.subwrap{padding:9px 12px}
+.subttl{font-size:11.5px; color:var(--ink); font-weight:700; margin-bottom:5px}
 table.sub{width:auto; min-width:60%; font-size:11.5px; background:#fff}
-table.sub th{background:var(--navy-l); font-weight:600; padding:3px 7px}
+table.sub th{background:var(--th); font-weight:600; padding:3px 7px}
 table.sub td{padding:3px 7px; background:#fff}
 td.items{font-size:11.5px; line-height:1.5}
 td.items small{color:var(--sub)}

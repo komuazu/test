@@ -173,6 +173,11 @@ def rebuild(cfg):
 class Handler(SimpleHTTPRequestHandler):
     cfg = None
 
+    # HTTP/1.1 で応答する。既定の HTTP/1.0 だと応答のたびに接続を切るため、
+    # data_<年>.json のような大きなファイル（10MB前後）を送っている途中で
+    # 切断が先に届き、ブラウザ側が「読み込み中のまま止まる」ことがあった。
+    protocol_version = 'HTTP/1.1'
+
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(WEB), **kw)
 

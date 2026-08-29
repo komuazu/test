@@ -27,7 +27,9 @@ with sync_playwright() as pw:
     pg.wait_for_selector('#matrix tbody tr')
 
     # ── 年間サマリー ──
-    check(pg.locator('.kpi').count() == 5, 'KPIカードが5枚（合計+3営業部）')
+    check(pg.locator('#sum tbody tr').count() == 4, '年間集計が3営業部+合計行')
+    check(pg.locator('#sum tbody tr.total td').first.inner_text().replace(',', '')
+          == '1797000', '年間集計の合計が 1,797,000 通し')
     check(pg.locator('#chart .bar').count() == 12, '棒グラフが12か月分')
     check(pg.locator('#matrix tbody tr').count() == 4, 'マトリクスが3営業部+合計行')
     total = pg.locator('#matrix tbody tr.total td').last.inner_text()

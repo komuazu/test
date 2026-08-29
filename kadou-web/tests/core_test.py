@@ -58,6 +58,11 @@ def check_pick():
         return json.loads(urllib.request.urlopen(req).read().decode('utf-8'))
 
     try:
+        # data_<年>.json は10MB前後になる。HTTP/1.0 のままだと送信途中で接続が
+        # 切れて、画面が読み込み中のまま止まることがあった（実際に半々で再現）。
+        check(server.Handler.protocol_version == 'HTTP/1.1',
+              '大きなデータを送り切れるよう HTTP/1.1 で応答する')
+
         r = post({'initial': 'C:' + chr(92) + 'Users'})
         check(r == {'ok': True, 'path': picked}, '選んだフォルダが画面に返る')
         check(got == ['C:' + chr(92) + 'Users'], '今の設定を開始位置としてダイアログに渡す')

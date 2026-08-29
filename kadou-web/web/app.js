@@ -112,20 +112,23 @@ function render() {
 /* 年間サマリー */
 function renderYear() {
   var all = DATA.records, tot = all.reduce(function (s, r) { return s + r.tsu; }, 0);
-  var k = $('#kpis'); k.innerHTML = '';
-  k.appendChild(el('div', 'kpi', '<div class="k">年間 通し数</div><div class="v">' + num(tot)
-    + '<span class="u">通し</span></div>'));
-  k.appendChild(el('div', 'kpi', '<div class="k">年間 件数（管理番号）</div><div class="v">' + num(all.length)
-    + '<span class="u">件</span></div>'));
+  // 年間 集計（営業部別）。集計Excelと同じ並び順で、合計を最後に置く
+  var s = ['<thead><tr><th>営業部</th><th class="num">通し数</th>'
+    + '<th class="num">件数</th><th class="num">構成比</th></tr></thead><tbody>'];
   DATA.depts.forEach(function (d) {
     var rs = all.filter(function (r) { return r.dept === d; });
-    var t = rs.reduce(function (s, r) { return s + r.tsu; }, 0);
-    k.appendChild(el('div', 'kpi ' + DEPTKEY[d],
-      '<div class="k">' + d + '（' + DATA.deptCodes[d].join(' / ') + '）</div>'
-      + '<div class="v">' + num(t) + '<span class="u">通し</span></div>'
-      + '<div class="k">' + num(rs.length) + '件　構成比 '
-      + (tot ? (t / tot * 100).toFixed(1) : '0.0') + '%</div>'));
+    var t = rs.reduce(function (a, r) { return a + r.tsu; }, 0);
+    s.push('<tr><th class="rh">' + esc(d)
+      + '<small>' + esc(DATA.deptCodes[d].join(' / ')) + '</small></th>'
+      + '<td class="num">' + num(t) + '</td>'
+      + '<td class="num">' + num(rs.length) + '</td>'
+      + '<td class="num">' + (tot ? (t / tot * 100).toFixed(1) : '0.0') + '%</td></tr>');
   });
+  s.push('<tr class="total"><th class="rh">合計</th>'
+    + '<td class="num">' + num(tot) + '</td>'
+    + '<td class="num">' + num(all.length) + '</td>'
+    + '<td class="num">' + (tot ? '100.0' : '0.0') + '%</td></tr></tbody>');
+  $('#sum').innerHTML = s.join('');
 
   // 積み上げ棒グラフ
   var per = MONTHS.map(function (m) {
