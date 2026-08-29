@@ -108,25 +108,19 @@ td.inp.filled{background:#f6eec4}
 .bar .pair .col.was b{background:var(--ot)}
 .bar .rate{font-size:10.5px; color:var(--ink); white-space:nowrap}
 
-/* 月ごとに部署を並べる前年比較（塗り=今年／斜線=前年）。
-   前年を白抜きにすると色の薄い部署と見分けがつかないので、同じ色の斜線にする。 */
-.bars.deptyoy{gap:18px; height:250px}
-.bars.deptyoy .bar{min-width:108px}
-.bar .grp{width:100%; flex:1; display:flex; align-items:flex-end; gap:6px}
-.bar .grp .dp{flex:1; height:100%; display:flex; align-items:flex-end; gap:1px}
-.bar .grp .dp b,.bar .grp .dp i{flex:1; display:block; min-height:1px;
-  border:1px solid currentColor; border-bottom:0}
-.bar .grp .dp b{background:currentColor}
-.bar .grp .dp i{background:repeating-linear-gradient(45deg,
-  #fff 0 2px, currentColor 2px 4px)}
-.bar .grp .dp.hq{color:var(--hq)}
-.bar .grp .dp.tk{color:var(--tk)}
-.bar .grp .dp.ik{color:var(--ik)}
-.bar .grp .dp.km{color:var(--km)}
-.bar .grp .dp.ot{color:var(--ot)}
+/* 月ごとに「今年の積み上げ」と「前年の積み上げ」を並べる前年比較。
+   積み上げのグラフと同じ形。前年は同じ色に白い斜線を重ねて区別する。 */
+.bars.deptyoy{gap:16px; height:250px}
+.bars.deptyoy .bar{min-width:78px}
+.bars.deptyoy .pair{gap:3px}
+.bars.deptyoy .pair .col{height:100%}
+.bar .stack.was .seg{background-image:repeating-linear-gradient(45deg,
+  rgba(255,255,255,.92) 0 1.5px, transparent 1.5px 6px)}
+.bar .pair .col b.was{background:repeating-linear-gradient(45deg,
+  rgba(255,255,255,.92) 0 1.5px, var(--hq) 1.5px 6px)}
 .legend .lg{color:var(--sub)}
 .legend i.hatch{background:repeating-linear-gradient(45deg,
-  #fff 0 2px, var(--sub) 2px 4px)}
+  rgba(255,255,255,.92) 0 1.5px, var(--sub) 1.5px 5px)}
 
 /* 部署ごとに並べる前年比較 */
 .ycharts .yc{margin-bottom:6px}

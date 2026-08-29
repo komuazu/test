@@ -52,12 +52,12 @@ with sync_playwright() as pw:
     pg.locator('#pillChart button[data-c=yoy]').click()
     pg.wait_for_timeout(300)
     bars = pg.locator('#chart .bar').count()
-    depts = pg.evaluate('DATA.depts.length')
-    check(bars and pg.locator('#chart .grp .dp').count() == bars * depts,
-          '月ごとに部署の棒が並ぶ  → %d月 × %d部署' % (bars, depts))
-    check(pg.locator('#chart .grp .dp b').count() == bars * depts
-          and pg.locator('#chart .grp .dp i').count() == bars * depts,
-          '部署ごとに今年（塗り）と前年（斜線）の2本が出る')
+    check(bars and pg.locator('#chart .pair .col').count() == bars * 2,
+          '月ごとに今年と前年の積み上げが並ぶ  → %d月' % bars)
+    check(pg.locator('#chart .stack.was').count() == bars,
+          '前年の積み上げ（斜線）が月の数だけ出る')
+    check(pg.locator('#chart .stack .seg').count() > bars,
+          '積み上げと同じように部署が段になっている')
     lg = pg.locator('#legend').inner_text().replace('\n', ' ')
     check('2025年' in lg and '斜線' in lg, '凡例に今年と前年が出る  → ' + lg)
     check(pg.locator('#selChartDept').is_visible(), '比べる部署を選べる')

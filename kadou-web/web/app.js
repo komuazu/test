@@ -297,41 +297,50 @@ function renderChartYoY(prev) {
   monthDeptBars(c, cur, pb, months, prev);
 }
 
-/* 月ごとに、部署を横に並べる。部署ごとに「塗り＝今年／白抜き＝前年」の2本。
-   どの月に どの部署が伸びた／落ちたかを、1つのグラフの中で見比べられる。 */
+/* 月ごとに「今年の積み上げ」と「前年の積み上げ」を並べる。
+   積み上げのグラフと同じ形（部署を積み上げた1本）を2本並べただけなので、
+   見方を変えずに前年と見比べられる。前年は同じ色の斜線で区別する。 */
 function monthDeptBars(c, cur, pb, months, prev) {
   c.className = 'bars deptyoy';
-  var max = 1;
-  months.forEach(function (m) {
+  var tot = months.map(function (m) {
+    var now = 0, was = 0;
     DATA.depts.forEach(function (d) {
-      max = Math.max(max, pick(cur, d, [m], 0), pick(pb, d, [m], 0));
+      now += pick(cur, d, [m], 0); was += pick(pb, d, [m], 0);
     });
+    return { m: m, now: now, was: was };
   });
+  var max = Math.max.apply(null, tot.map(function (o) {
+    return Math.max(o.now, o.was);
+  }).concat([1]));
   $('#legend').innerHTML = DATA.depts.map(function (d) {
     return '<span><i class="' + DEPTKEY[d] + '"></i>' + esc(d) + '</span>';
   }).join('') + '<span class="lg">塗り＝' + DATA.year + '年</span>'
     + '<span class="lg"><i class="hatch"></i>斜線＝' + prev.year + '年</span>';
 
-  months.forEach(function (m) {
-    var now = 0, was = 0;
-    var b = el('div', 'bar'), track = el('div', 'track'), grp = el('div', 'grp');
-    DATA.depts.forEach(function (d) {
-      var n = pick(cur, d, [m], 0), w = pick(pb, d, [m], 0);
-      now += n; was += w;
-      var dp = el('div', 'dp ' + DEPTKEY[d]);
-      dp.title = m + '月 ' + d + '　今年 ' + num(n) + ' ／ 前年 ' + num(w)
-        + '（' + ratio(n, w) + '）';
-      var bn = el('b'), bw = el('i');
-      bn.style.height = (n / max * 100) + '%';
-      bw.style.height = (w / max * 100) + '%';
-      dp.appendChild(bn);
-      dp.appendChild(bw);
-      grp.appendChild(dp);
+  tot.forEach(function (o) {
+    var b = el('div', 'bar'), track = el('div', 'track'), pair = el('div', 'pair');
+    track.appendChild(el('div', 'val', o.now ? num(o.now) : ''));
+    [[DATA.year, o.now, cur, ''], [prev.year, o.was, pb, ' was']].forEach(function (x) {
+      var col = el('div', 'col');
+      var st = el('div', 'stack' + x[3]);
+      st.style.height = (x[1] / max * 100) + '%';
+      DATA.depts.forEach(function (d) {
+        var v = pick(x[2], d, [o.m], 0);
+        if (!v) { return; }
+        var g = el('div', 'seg ' + DEPTKEY[d]);
+        g.style.height = (v / x[1] * 100) + '%';
+        g.title = o.m + '月 ' + x[0] + '年 ' + d + '　' + num(v) + ' 通し';
+        st.appendChild(g);
+      });
+      col.appendChild(st);
+      col.title = o.m + '月 ' + x[0] + '年　' + num(x[1]) + ' 通し';
+      pair.appendChild(col);
     });
-    track.appendChild(grp);
+    track.appendChild(pair);
     b.appendChild(track);
-    b.appendChild(el('div', 'rate', was ? mark(ratio(now, was), now, was) : '－'));
-    b.appendChild(el('div', 'lab', m + '月'));
+    b.appendChild(el('div', 'rate', o.was
+      ? mark(ratio(o.now, o.was), o.now, o.was) : '－'));
+    b.appendChild(el('div', 'lab', o.m + '月'));
     c.appendChild(b);
   });
 }
@@ -354,6 +363,7 @@ function yoyBars(box, ds, cur, pb, months, prev, mini) {
       var col = el('div', 'col ' + x[0]);
       var bar = el('b');
       bar.style.height = (x[1] / max * 100) + '%';
+      bar.className = x[0] === 'was' ? 'was' : '';
       col.title = o.m + '月 ' + x[2] + '年　' + num(x[1]) + ' 通し';
       col.appendChild(bar);
       pair.appendChild(col);
