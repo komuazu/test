@@ -47,6 +47,24 @@ with sync_playwright() as pw:
     tip = pg.locator('#cmpMonth tbody tr.total td').first.get_attribute('title')
     check('今年' in tip and '前年' in tip,
           '月別前年比のマスに今年と前年の数字が出る  → ' + tip)
+
+    # ── グラフを前年比較に切り替える ──
+    pg.locator('#pillChart button[data-c=yoy]').click()
+    pg.wait_for_timeout(300)
+    bars = pg.locator('#chart .bar').count()
+    check(bars and pg.locator('#chart .pair .col').count() == bars * 2,
+          'グラフが今年と前年の2本組になる  → %d組' % bars)
+    check('2025年' in pg.locator('#legend').inner_text(),
+          '凡例が今年と前年になる  → ' + pg.locator('#legend').inner_text().replace('\n', ' '))
+    check(pg.locator('#selChartDept').is_visible(), '比べる部署を選べる')
+    pg.select_option('#selChartDept', '本社営業部')
+    pg.wait_for_timeout(300)
+    check('本社営業部' in pg.locator('#chartNote').inner_text(),
+          '選んだ部署が見出しに出る  → ' + pg.locator('#chartNote').inner_text())
+    pg.screenshot(path=str(SHOT / '09_グラフ前年比較.png'), full_page=True)
+    pg.locator('#pillChart button[data-c=stack]').click()
+    pg.wait_for_timeout(300)
+    check(pg.locator('#chart .seg').count() > 0, '積み上げに戻せる')
     check(pg.locator('#matrix tbody tr').count() == 6, 'マトリクスが5部署+合計行')
     total = pg.locator('#matrix tbody tr.total td').last.inner_text()
     check('1,874,777' in total, '年間合計 1,874,777 通し  → ' + total.replace('\n', ' '))

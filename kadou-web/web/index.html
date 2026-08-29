@@ -56,7 +56,14 @@
     </div>
 
     <div class="card">
-      <h2>月別 通し数 <small>部署の積み上げ</small></h2>
+      <h2>月別 通し数 <small id="chartNote">部署の積み上げ</small></h2>
+      <div class="toolbar">
+        <span class="pills" id="pillChart">
+          <button data-c="stack" class="on">積み上げ（部署別）</button>
+          <button data-c="yoy">前年と比較</button>
+        </span>
+        <select id="selChartDept" title="前年と比べる部署"></select>
+      </div>
       <div class="bars" id="chart"></div>
       <div class="legend" id="legend"></div>
     </div>

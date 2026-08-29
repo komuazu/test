@@ -99,12 +99,34 @@ td.inp.filled{background:#f6eec4}
 .bar .seg{width:100%} .bar .seg.hq{background:var(--hq)} .bar .seg.tk{background:var(--tk)}
 .bar .seg.ik{background:var(--ik)} .bar .seg.km{background:var(--km)}
 .bar .seg.ot{background:var(--ot)}
+.bar .pair{width:100%; flex:1; display:flex; align-items:flex-end; gap:4px}
+/* 高さ100%を入れないと、中の棒の高さ（％）の基準が決まらず描かれない */
+.bar .pair .col{flex:1; height:100%; display:flex; flex-direction:column;
+  justify-content:flex-end}
+.bar .pair .col b{display:block; width:100%; border:1px solid #6f7883; border-bottom:0}
+.bar .pair .col.now b{background:var(--hq)}
+.bar .pair .col.was b{background:var(--ot)}
+.bar .rate{font-size:10.5px; color:var(--ink); white-space:nowrap}
+
+/* 部署ごとに並べる前年比較 */
+.ycharts .yc{margin-bottom:6px}
+.ycharts .yct{font-size:12.5px; font-weight:700; margin:8px 0 0; padding-bottom:3px;
+  border-bottom:1px solid var(--line-s)}
+.ycharts .yct small{font-weight:400; color:var(--sub); margin-left:10px}
+.bars.mini{height:104px; gap:8px}
+.bars.mini .val{display:none}
+.bars.mini .lab{font-size:10.5px}
+
+/* 前年より減った数字は赤、増えた数字は太字 */
+.dn{color:var(--bad)}
+.up{font-weight:700}
 .bar .lab{font-size:11px; color:var(--sub); white-space:nowrap}
 .bar .val{font-size:10.5px; color:var(--ink); font-variant-numeric:tabular-nums; white-space:nowrap}
 .legend{display:flex; gap:16px; font-size:12px; color:var(--sub); margin-top:6px; flex-wrap:wrap}
 .legend i{display:inline-block; width:11px; height:11px; border:1px solid #6f7883; margin-right:5px; vertical-align:-1px}
 .legend i.hq{background:var(--hq)} .legend i.tk{background:var(--tk)}
 .legend i.ik{background:var(--ik)} .legend i.km{background:var(--km)}
+.legend i.now{background:var(--hq)} .legend i.was{background:var(--ot)}
 .legend i.ot{background:var(--ot)}
 
 /* ── 操作列 ── */

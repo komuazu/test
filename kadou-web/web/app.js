@@ -7,7 +7,8 @@ var YEARS = null, DATA = null, MEMO = {},
     DEPTKEY = { '本社営業部': 'hq', '東京営業部': 'tk', '池袋営業部': 'ik',
                 '生産管理部（工務）': 'km', 'その他': 'ot' };
 var S = { view: 'year', year: null, month: null, dept: '全社', deptC: '全社', monthC: 0,
-          monthR: null, machineR: '全機械', q: '', qc: '', qr: '' };
+          monthR: null, machineR: '全機械', q: '', qc: '', qr: '',
+          chart: 'stack', chartDept: 'すべて' };
 var MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 var $ = function (s) { return document.querySelector(s); };
@@ -106,7 +107,8 @@ function render() {
   var w = DATA.warnings || [];
   $('#warns').innerHTML = w.length
     ? '<div class="warn"><b>注意</b><br>' + w.map(esc).join('<br>') + '</div>' : '';
-  renderYear(); renderCompare(); renderMonthControls(); renderMonth();
+  renderChartDeptSelect(); renderYear(); renderCompare();
+  renderMonthControls(); renderMonth();
   renderClientControls(); renderClient(); renderRawControls(); renderRaw(); renderSrc();
 }
 
@@ -139,9 +141,28 @@ function ratio(now, before) {
   return before ? (now / before * 100).toFixed(1) + '%' : '－';
 }
 
+/* 前年より減っていれば赤、増えていれば太字（要望による見せ方） */
+function mark(text, now, before) {
+  var d = now - before;
+  return '<span class="' + (d < 0 ? 'dn' : d > 0 ? 'up' : '') + '">' + text + '</span>';
+}
+
 function delta(now, before) {
   var d = now - before;
   return (d > 0 ? '+' : d < 0 ? '-' : '±') + num(Math.abs(d));
+}
+
+function renderChartDeptSelect() {
+  var sel = $('#selChartDept'), keep = S.chartDept;
+  sel.innerHTML = '';
+  var list = ['すべて', '全社'].concat(DATA.depts);
+  list.forEach(function (d) {
+    var o = el('option', null, d === 'すべて' ? 'すべて（部署ごとに並べる）' : d);
+    o.value = d;
+    sel.appendChild(o);
+  });
+  if (list.indexOf(keep) < 0) { S.chartDept = 'すべて'; }
+  sel.value = S.chartDept;
 }
 
 function renderCompare() {
@@ -175,11 +196,11 @@ function renderCompare() {
     h += '<tr' + (all ? ' class="total"' : '') + '><th class="rh">' + esc(d) + '</th>'
       + '<td class="num">' + num(ct) + '</td>'
       + '<td class="num">' + num(pt) + '</td>'
-      + '<td class="num">' + delta(ct, pt) + '</td>'
-      + '<td class="num">' + ratio(ct, pt) + '</td>'
+      + '<td class="num">' + mark(delta(ct, pt), ct, pt) + '</td>'
+      + '<td class="num">' + mark(ratio(ct, pt), ct, pt) + '</td>'
       + '<td class="num">' + num(cc) + '</td>'
       + '<td class="num">' + num(pc) + '</td>'
-      + '<td class="num">' + ratio(cc, pc) + '</td></tr>';
+      + '<td class="num">' + mark(ratio(cc, pc), cc, pc) + '</td></tr>';
   });
   $('#cmpSum').innerHTML = h + '</tbody>';
 
@@ -197,11 +218,129 @@ function renderCompare() {
       ds.forEach(function (x) { c += pick(cur, x, ms, 0); p += pick(pb, x, ms, 0); });
       t += '<td class="num" title="' + esc(d) + ' ' + (m === '計' ? '合計' : m + '月')
         + '　今年 ' + num(c) + ' ／ 前年 ' + num(p) + '">'
-        + ratio(c, p) + '<br><small>' + delta(c, p) + '</small></td>';
+        + mark(ratio(c, p), c, p) + '<br><small>' + mark(delta(c, p), c, p)
+        + '</small></td>';
     });
     t += '</tr>';
   });
   $('#cmpMonth').innerHTML = t + '</tbody>';
+}
+
+/* ── 月別グラフ。積み上げ（部署別）と、前年との比較を切り替えられる ── */
+function renderChart() {
+  var prev = yearSummary(DATA.year - 1);
+  var canYoY = !!(prev && prev.byDept);
+  $('#pillChart').querySelector('[data-c=yoy]').disabled = !canYoY;
+  if (!canYoY && S.chart === 'yoy') { S.chart = 'stack'; }
+  $$('#pillChart button').forEach(function (b) {
+    b.className = b.dataset.c === S.chart ? 'on' : '';
+  });
+  var yoy = S.chart === 'yoy';
+  $('#selChartDept').style.display = yoy ? '' : 'none';
+  $('#chartNote').textContent = yoy
+    ? DATA.year + '年 と ' + (DATA.year - 1) + '年　'
+      + (S.chartDept === 'すべて' ? '部署ごと' : S.chartDept)
+    : '部署の積み上げ';
+  if (yoy) { renderChartYoY(prev); } else { renderChartStack(); }
+}
+
+function renderChartStack() {
+  $('#chart').className = 'bars';
+  var per = MONTHS.map(function (m) {
+    var o = { m: m, total: 0 };
+    DATA.depts.forEach(function (d) {
+      o[d] = recs(m, d).reduce(function (s, r) { return s + r.tsu; }, 0);
+      o.total += o[d];
+    });
+    return o;
+  });
+  $('#legend').innerHTML = DATA.depts.map(function (d) {
+    return '<span><i class="' + DEPTKEY[d] + '"></i>' + esc(d) + '</span>';
+  }).join('');
+  var max = Math.max.apply(null, per.map(function (o) { return o.total; }).concat([1]));
+  var c = $('#chart'); c.innerHTML = '';
+  per.forEach(function (o) {
+    var b = el('div', 'bar');
+    var track = el('div', 'track'), st = el('div', 'stack');
+    track.appendChild(el('div', 'val', o.total ? num(o.total) : ''));   // 棒のすぐ上に数値
+    st.style.height = (o.total / max * 100) + '%';
+    DATA.depts.forEach(function (d) {
+      if (!o[d]) return;
+      var g = el('div', 'seg ' + DEPTKEY[d]);
+      g.style.height = (o[d] / o.total * 100) + '%';
+      g.title = o.m + '月 ' + d + '　' + num(o[d]) + ' 通し';
+      st.appendChild(g);
+    });
+    track.appendChild(st);
+    b.appendChild(track);
+    b.appendChild(el('div', 'lab', o.m + '月'));
+    c.appendChild(b);
+  });
+}
+
+/* 今年と前年を月ごとに並べる。前年は years.json の小さな集計から取る。
+   「すべて」を選ぶと、全社に続けて部署ごとの小さなグラフを縦に並べる。 */
+function renderChartYoY(prev) {
+  var cur = curByDept(), pb = prev.byDept;
+  var months = (DATA.months && DATA.months.length) ? DATA.months : MONTHS;
+  $('#legend').innerHTML = '<span><i class="now"></i>' + DATA.year + '年</span>'
+    + '<span><i class="was"></i>' + prev.year + '年</span>';
+
+  var c = $('#chart');
+  c.innerHTML = '';
+  if (S.chartDept !== 'すべて') {
+    c.className = 'bars';
+    yoyBars(c, S.chartDept === '全社' ? DATA.depts : [S.chartDept],
+            cur, pb, months, prev, false);
+    return;
+  }
+  c.className = 'ycharts';
+  ['全社'].concat(DATA.depts).forEach(function (d) {
+    var ds = d === '全社' ? DATA.depts : [d];
+    var now = 0, was = 0;
+    ds.forEach(function (x) {
+      now += pick(cur, x, months, 0); was += pick(pb, x, months, 0);
+    });
+    var box = el('div', 'yc');
+    box.appendChild(el('div', 'yct', esc(d) + '<small>' + num(now) + ' 通し　'
+      + mark(ratio(now, was), now, was) + '　'
+      + mark(delta(now, was), now, was) + '</small>'));
+    var bars = el('div', 'bars mini');
+    yoyBars(bars, ds, cur, pb, months, prev, true);
+    box.appendChild(bars);
+    c.appendChild(box);
+  });
+}
+
+/* 1つぶんの棒グラフ（今年と前年の2本組を月ごとに） */
+function yoyBars(box, ds, cur, pb, months, prev, mini) {
+  var per = months.map(function (m) {
+    var now = 0, was = 0;
+    ds.forEach(function (d) { now += pick(cur, d, [m], 0); was += pick(pb, d, [m], 0); });
+    return { m: m, now: now, was: was };
+  });
+  var max = Math.max.apply(null, per.map(function (o) {
+    return Math.max(o.now, o.was);
+  }).concat([1]));
+  per.forEach(function (o) {
+    var b = el('div', 'bar');
+    var track = el('div', 'track'), pair = el('div', 'pair');
+    track.appendChild(el('div', 'val', o.now ? num(o.now) : ''));
+    [['now', o.now, DATA.year], ['was', o.was, prev.year]].forEach(function (x) {
+      var col = el('div', 'col ' + x[0]);
+      var bar = el('b');
+      bar.style.height = (x[1] / max * 100) + '%';
+      col.title = o.m + '月 ' + x[2] + '年　' + num(x[1]) + ' 通し';
+      col.appendChild(bar);
+      pair.appendChild(col);
+    });
+    track.appendChild(pair);
+    b.appendChild(track);
+    b.appendChild(el('div', 'rate', o.was
+      ? mark(ratio(o.now, o.was), o.now, o.was) : '－'));
+    b.appendChild(el('div', 'lab', o.m + '月'));
+    box.appendChild(b);
+  });
 }
 
 /* 年間サマリー */
@@ -233,37 +372,7 @@ function renderYear() {
     + '<td class="num">' + (tot ? '100.0' : '0.0') + '%</td></tr></tbody>');
   $('#sum').innerHTML = s.join('');
 
-  // 積み上げ棒グラフ
-  var per = MONTHS.map(function (m) {
-    var o = { m: m, total: 0 };
-    DATA.depts.forEach(function (d) {
-      o[d] = recs(m, d).reduce(function (s, r) { return s + r.tsu; }, 0);
-      o.total += o[d];
-    });
-    return o;
-  });
-  $('#legend').innerHTML = DATA.depts.map(function (d) {
-    return '<span><i class="' + DEPTKEY[d] + '"></i>' + esc(d) + '</span>';
-  }).join('');
-  var max = Math.max.apply(null, per.map(function (o) { return o.total; }).concat([1]));
-  var c = $('#chart'); c.innerHTML = '';
-  per.forEach(function (o) {
-    var b = el('div', 'bar');
-    var track = el('div', 'track'), st = el('div', 'stack');
-    track.appendChild(el('div', 'val', o.total ? num(o.total) : ''));   // 棒のすぐ上に数値
-    st.style.height = (o.total / max * 100) + '%';
-    DATA.depts.forEach(function (d) {
-      if (!o[d]) return;
-      var g = el('div', 'seg ' + DEPTKEY[d]);
-      g.style.height = (o[d] / o.total * 100) + '%';
-      g.title = o.m + '月 ' + d + '　' + num(o[d]) + ' 通し';
-      st.appendChild(g);
-    });
-    track.appendChild(st);
-    b.appendChild(track);
-    b.appendChild(el('div', 'lab', o.m + '月'));
-    c.appendChild(b);
-  });
+  renderChart();
 
   // 月×営業部 マトリクス
   var t = $('#matrix'), h = '<thead><tr><th>部署</th>';
@@ -833,6 +942,12 @@ function switchView(v) {
 
 $$('nav.tabs button').forEach(function (b) { b.onclick = function () { switchView(b.dataset.view); }; });
 $('#btnPrint').onclick = function () { window.print(); };
+$$('#pillChart button').forEach(function (b) {
+  b.onclick = function () { S.chart = b.dataset.c; renderChart(); };
+});
+$('#selChartDept').onchange = function () {
+  S.chartDept = $('#selChartDept').value; renderChart();
+};
 $('#btnCsvYear').onclick = csvYear;
 $('#btnCsvCmp').onclick = csvCmp;
 $('#btnCsvCmpM').onclick = csvCmpM;
