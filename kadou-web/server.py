@@ -184,13 +184,20 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass                                     # コンソールを静かに保つ
 
+    def end_headers(self):
+        # ブラウザにためこませない。index.html / app.js / style.css は名前が
+        # 変わらないため、キャッシュが効くとアプリを更新しても古い画面が出続ける
+        # （実際に、更新したのに「何も変わっていない」状態になった）。
+        # 手元のフォルダを読むだけなので、毎回読み直しても遅くならない。
+        self.send_header('Cache-Control', 'no-store, must-revalidate')
+        super().end_headers()
+
     # ── 応答ヘルパ ──
     def _json(self, obj, status=200):
         body = json.dumps(obj, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body)
 
