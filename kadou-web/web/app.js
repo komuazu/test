@@ -157,7 +157,7 @@ function renderChartDeptSelect() {
   sel.innerHTML = '';
   var list = ['すべて', '全社'].concat(DATA.depts);
   list.forEach(function (d) {
-    var o = el('option', null, d === 'すべて' ? 'すべて（部署ごとに並べる）' : d);
+    var o = el('option', null, d === 'すべて' ? 'すべて（月ごとに部署を並べる）' : d);
     o.value = d;
     sel.appendChild(o);
   });
@@ -294,21 +294,45 @@ function renderChartYoY(prev) {
             cur, pb, months, prev, false);
     return;
   }
-  c.className = 'ycharts';
-  ['全社'].concat(DATA.depts).forEach(function (d) {
-    var ds = d === '全社' ? DATA.depts : [d];
-    var now = 0, was = 0;
-    ds.forEach(function (x) {
-      now += pick(cur, x, months, 0); was += pick(pb, x, months, 0);
+  monthDeptBars(c, cur, pb, months, prev);
+}
+
+/* 月ごとに、部署を横に並べる。部署ごとに「塗り＝今年／白抜き＝前年」の2本。
+   どの月に どの部署が伸びた／落ちたかを、1つのグラフの中で見比べられる。 */
+function monthDeptBars(c, cur, pb, months, prev) {
+  c.className = 'bars deptyoy';
+  var max = 1;
+  months.forEach(function (m) {
+    DATA.depts.forEach(function (d) {
+      max = Math.max(max, pick(cur, d, [m], 0), pick(pb, d, [m], 0));
     });
-    var box = el('div', 'yc');
-    box.appendChild(el('div', 'yct', esc(d) + '<small>' + num(now) + ' 通し　'
-      + mark(ratio(now, was), now, was) + '　'
-      + mark(delta(now, was), now, was) + '</small>'));
-    var bars = el('div', 'bars mini');
-    yoyBars(bars, ds, cur, pb, months, prev, true);
-    box.appendChild(bars);
-    c.appendChild(box);
+  });
+  $('#legend').innerHTML = DATA.depts.map(function (d) {
+    return '<span><i class="' + DEPTKEY[d] + '"></i>' + esc(d) + '</span>';
+  }).join('') + '<span class="lg">塗り＝' + DATA.year + '年</span>'
+    + '<span class="lg"><i class="hatch"></i>斜線＝' + prev.year + '年</span>';
+
+  months.forEach(function (m) {
+    var now = 0, was = 0;
+    var b = el('div', 'bar'), track = el('div', 'track'), grp = el('div', 'grp');
+    DATA.depts.forEach(function (d) {
+      var n = pick(cur, d, [m], 0), w = pick(pb, d, [m], 0);
+      now += n; was += w;
+      var dp = el('div', 'dp ' + DEPTKEY[d]);
+      dp.title = m + '月 ' + d + '　今年 ' + num(n) + ' ／ 前年 ' + num(w)
+        + '（' + ratio(n, w) + '）';
+      var bn = el('b'), bw = el('i');
+      bn.style.height = (n / max * 100) + '%';
+      bw.style.height = (w / max * 100) + '%';
+      dp.appendChild(bn);
+      dp.appendChild(bw);
+      grp.appendChild(dp);
+    });
+    track.appendChild(grp);
+    b.appendChild(track);
+    b.appendChild(el('div', 'rate', was ? mark(ratio(now, was), now, was) : '－'));
+    b.appendChild(el('div', 'lab', m + '月'));
+    c.appendChild(b);
   });
 }
 

@@ -5,7 +5,7 @@
   --ink:#1a1a1a; --sub:#5f6469; --line:#9ba1a8; --line-s:#dcdfe3;
   --bg:#f1f1ef; --card:#ffffff; --th:#e7e9ec;
   --ok:#1e6b46; --warn:#7a5313; --bad:#992222;
-  --hq:#404b58; --tk:#7a848f; --ik:#9aa3ac; --km:#c2c8ce; --ot:#dde1e5;
+  --hq:#39434e; --tk:#69737e; --ik:#8f98a2; --km:#aeb6bf; --ot:#ccd2d8;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -107,6 +107,26 @@ td.inp.filled{background:#f6eec4}
 .bar .pair .col.now b{background:var(--hq)}
 .bar .pair .col.was b{background:var(--ot)}
 .bar .rate{font-size:10.5px; color:var(--ink); white-space:nowrap}
+
+/* 月ごとに部署を並べる前年比較（塗り=今年／斜線=前年）。
+   前年を白抜きにすると色の薄い部署と見分けがつかないので、同じ色の斜線にする。 */
+.bars.deptyoy{gap:18px; height:250px}
+.bars.deptyoy .bar{min-width:108px}
+.bar .grp{width:100%; flex:1; display:flex; align-items:flex-end; gap:6px}
+.bar .grp .dp{flex:1; height:100%; display:flex; align-items:flex-end; gap:1px}
+.bar .grp .dp b,.bar .grp .dp i{flex:1; display:block; min-height:1px;
+  border:1px solid currentColor; border-bottom:0}
+.bar .grp .dp b{background:currentColor}
+.bar .grp .dp i{background:repeating-linear-gradient(45deg,
+  #fff 0 2px, currentColor 2px 4px)}
+.bar .grp .dp.hq{color:var(--hq)}
+.bar .grp .dp.tk{color:var(--tk)}
+.bar .grp .dp.ik{color:var(--ik)}
+.bar .grp .dp.km{color:var(--km)}
+.bar .grp .dp.ot{color:var(--ot)}
+.legend .lg{color:var(--sub)}
+.legend i.hatch{background:repeating-linear-gradient(45deg,
+  #fff 0 2px, var(--sub) 2px 4px)}
 
 /* 部署ごとに並べる前年比較 */
 .ycharts .yc{margin-bottom:6px}
