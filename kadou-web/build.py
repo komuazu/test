@@ -127,8 +127,12 @@ def hint_subdirs(cands):
 
 
 NEW, OLD = '新', '旧'
-YEAR_NEW = re.compile(r'^★新・(\d{2})年稼動$')
-YEAR_OLD = re.compile(r'^(\d{2})年稼働$')
+MIN_YEAR = 2013          # これより前の年は読まない（古い試験用の日報が混ざるため）
+MAX_DEPTH = 6            # 年フォルダを探しにいく深さ
+
+# 「★新・26年稼動」「26年稼働」「13年稼働」といった年フォルダの名前。
+# 稼動と稼働のどちらでもよい。
+YEAR_DIR = re.compile(r'^(★新[・･])?(\d{2})年稼[動働]$')
 
 
 def inner_dir(d):
@@ -137,11 +141,53 @@ def inner_dir(d):
     return nested if nested.is_dir() else d
 
 
-def year_folders(src):
-    """稼動日報が入っている年フォルダを集める
+def year_dir_kind(name):
+    """フォルダ名が年フォルダの形なら (年, 種類) を返す。違えば None
 
       ★新・NN年稼動 … その年の正（新しい方）
       NN年稼働      … ★新 に無い年・月を補う古い方
+    """
+    m = YEAR_DIR.match(fold_name(name))
+    if not m:
+        return None
+    return 2000 + int(m.group(2)), NEW if m.group(1) else OLD
+
+
+def scan_year_dirs(root, maxdepth=MAX_DEPTH):
+    """配下をたどって年フォルダを全部見つける
+
+    入れ物のフォルダ（「13年稼動～25年稼動」など）の名前は見ない。年が変わって
+    「13年～26年稼働」に変わっても、「27年稼働」が増えても、設定を直さずに
+    最新のデータが読めるようにするため。
+
+    戻り値: [(年, 種類, 深さ, フォルダ), ...]
+    """
+    out = []
+
+    def walk(d, depth):
+        if depth > maxdepth:
+            return
+        try:
+            kids = sorted(x for x in d.iterdir() if x.is_dir())
+        except OSError:
+            return
+        for k in kids:
+            hit = year_dir_kind(k.name)
+            if hit:
+                out.append((hit[0], hit[1], depth, inner_dir(k)))
+                continue                     # 年フォルダの中はもう探さない
+            walk(k, depth + 1)
+
+    walk(Path(root), 1)
+    return out
+
+
+def year_folders(src):
+    """実際に読む年フォルダを決める
+
+    同じ年・同じ種類が何か所にもあるときは、いちばん浅いものだけを使う。
+    控えのフォルダ（☆平版印刷課印刷稼働日報 の下など）に置かれた写しは階層が
+    深いので、名前で除外しなくても自然に外れる。同じ通し数を二重に数えないため。
 
     src 自身が年フォルダのこともある（U: の ★新・26年稼動 を直接指定した場合）。
     年フォルダが1つも無ければ空を返し、呼び出し側が従来どおり配下を全部読む。
@@ -149,21 +195,19 @@ def year_folders(src):
     戻り値: [(フォルダ, NEW か OLD), ...]
     """
     src = Path(src)
-    if YEAR_NEW.match(src.name):
-        return [(inner_dir(src), NEW)]
-    if YEAR_OLD.match(src.name):
-        return [(src, OLD)]
+    hit = year_dir_kind(src.name)
+    if hit:
+        return [(inner_dir(src), hit[1])]
     if not src.is_dir():
         return []
-    out = []
-    for d in sorted(src.iterdir()):
-        if not d.is_dir():
+    best = {}
+    for year, kind, depth, path in scan_year_dirs(src):
+        if year < MIN_YEAR:
             continue
-        if YEAR_NEW.match(d.name):
-            out.append((inner_dir(d), NEW))
-        elif YEAR_OLD.match(d.name):
-            out.append((d, OLD))
-    return out
+        k = (year, kind)
+        if k not in best or depth < best[k][0]:
+            best[k] = (depth, path)
+    return [(p, kind) for (_y, kind), (_d, p) in sorted(best.items())]
 
 
 def report_files(folder, kind):
@@ -204,22 +248,41 @@ def collect_files(srcs):
     """
     if isinstance(srcs, (str, Path)):
         srcs = [srcs]
-    got, seen = [], set()
-    for src in srcs:
-        folders = year_folders(src)
-        if not folders:                            # 年フォルダが無い形（テスト用など）
-            for p in find_xls([src]):
-                key = file_key(p)
-                if key not in seen:
-                    seen.add(key)
-                    got.append((p, NEW))
+
+    best, plain = {}, []
+    for order, src in enumerate(srcs):
+        src = Path(src)
+        hit = year_dir_kind(src.name)
+        if hit:                                    # src 自身が年フォルダ
+            found = [(hit[0], hit[1], 0, inner_dir(src))]
+        else:
+            found = scan_year_dirs(src) if src.is_dir() else []
+        if not found:
+            plain.append(src)                      # 年フォルダが無い形（テスト用など）
             continue
-        for folder, kind in folders:
-            for p in report_files(folder, kind):
-                key = file_key(p)
-                if key not in seen:
-                    seen.add(key)
-                    got.append((p, kind))
+        for year, kind, depth, path in found:
+            if year < MIN_YEAR:
+                continue
+            k = (year, kind)
+            # 浅いものを優先し、同じ深さなら設定で先に書いたフォルダを採る。
+            # デスクトップの控えと U: の本体のように、同じ年が別のフォルダにも
+            # あるとき、両方読むと同じ通し数を二重に数えてしまうため。
+            if k not in best or (depth, order) < best[k][:2]:
+                best[k] = (depth, order, path, kind)
+
+    got, seen = [], set()
+    for _key, (_d, _o, folder, kind) in sorted(best.items()):
+        for p in report_files(folder, kind):
+            fk = file_key(p)
+            if fk not in seen:
+                seen.add(fk)
+                got.append((p, kind))
+    for src in plain:
+        for p in find_xls([src]):
+            fk = file_key(p)
+            if fk not in seen:
+                seen.add(fk)
+                got.append((p, NEW))
     return got
 
 
@@ -442,7 +505,13 @@ def build(src, year=None, outdir=None):
     if not rows:
         raise SystemExit('月次シート（「26年1月」形式）が1つも見つかりませんでした: %s' % src)
 
-    years = sorted(rows)
+    too_old = sorted(y for y in rows if y < MIN_YEAR)
+    if too_old:
+        warnings.append('%s は %d年より前のため読み込みませんでした。'
+                        % ('、'.join('%d年' % y for y in too_old), MIN_YEAR))
+    years = sorted(y for y in rows if y >= MIN_YEAR)
+    if not years:
+        raise SystemExit('%d年以降のデータが見つかりませんでした。' % MIN_YEAR)
     if year:
         if year not in years:
             raise SystemExit('%d年 のデータがありません。このフォルダにあるのは %s です。'

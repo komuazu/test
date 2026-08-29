@@ -7,6 +7,7 @@
 """
 import datetime
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -136,6 +137,37 @@ def main():
         check(rows[2015][8] == ['新8月'] and rows[2015][7] == ['旧7月'],
               '重なる月は★新、★新に無い月は古いフォルダから採る')
         check(notes and '2015年の8月' in notes[0], '入れ替えた月をお知らせに出す')
+
+        # ── 入れ物のフォルダ名が変わっても年フォルダを見つける ──
+        box = tmp / '入れ物' / '13年～26年稼働'          # 来年こう変わる想定
+        shutil.copytree(multi / '★新・25年稼動', box / '★新・25年稼動')
+        got = build.collect_files([tmp / '入れ物'])
+        check(len(got) == 2 and all(k == build.NEW for _p, k in got),
+              '入れ物のフォルダ名を見ずに年フォルダを見つける  → %d本' % len(got))
+
+        shutil.copytree(multi / '★新・25年稼動', tmp / '入れ物' / '07年稼動')
+        check(len(build.collect_files([tmp / '入れ物'])) == 2,
+              '%d年より前の年フォルダは読まない' % build.MIN_YEAR)
+
+        # 同じ年が別のフォルダにもあるとき（中身は同じでも日時が違う写し）
+        other = tmp / 'もう一つ'
+        shutil.copytree(multi / '★新・25年稼動', other / '★新・25年稼動')
+        for f in (other / '★新・25年稼動').glob('*.xls'):
+            os.utime(f, (1000000000, 1000000000))
+        got = build.collect_files([tmp / '入れ物', other])
+        check(len(got) == 2, '同じ年が別のフォルダにもあるときは1か所だけ読む  → %d本'
+              % len(got))
+        check(all('もう一つ' in str(x) for x, _k in got),
+              '浅いところにある年フォルダを使う（控えは階層が深いので外れる）')
+
+        # 深さが同じなら、設定で先に書いたフォルダを使う
+        other2 = tmp / 'さらに別'
+        shutil.copytree(multi / '★新・25年稼動', other2 / '★新・25年稼動')
+        for f in (other2 / '★新・25年稼動').glob('*.xls'):
+            os.utime(f, (1100000000, 1100000000))
+        got = build.collect_files([other, other2])
+        check(len(got) == 2 and all('もう一つ' in str(x) for x, _k in got),
+              '深さが同じなら、設定で先に書いたフォルダを使う')
 
         # ── 同じファイルを二重に数えない ──
         dup = tmp / 'dup'
