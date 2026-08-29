@@ -5,7 +5,7 @@
   --ink:#1a1a1a; --sub:#5f6469; --line:#9ba1a8; --line-s:#dcdfe3;
   --bg:#f1f1ef; --card:#ffffff; --th:#e7e9ec;
   --ok:#1e6b46; --warn:#7a5313; --bad:#992222;
-  --hq:#404b58; --tk:#7a848f; --ik:#b3bac1; --ot:#d8dce0;
+  --hq:#404b58; --tk:#7a848f; --ik:#9aa3ac; --km:#c2c8ce; --ot:#dde1e5;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -97,13 +97,15 @@ td.inp.filled{background:#f6eec4}
 .bar .track{width:100%; flex:1; display:flex; flex-direction:column; justify-content:flex-end}
 .bar .stack{width:100%; flex:0 0 auto; max-height:88%; display:flex; flex-direction:column; min-height:2px; border:1px solid #6f7883; border-bottom:0}
 .bar .seg{width:100%} .bar .seg.hq{background:var(--hq)} .bar .seg.tk{background:var(--tk)}
-.bar .seg.ik{background:var(--ik)} .bar .seg.ot{background:var(--ot)}
+.bar .seg.ik{background:var(--ik)} .bar .seg.km{background:var(--km)}
+.bar .seg.ot{background:var(--ot)}
 .bar .lab{font-size:11px; color:var(--sub); white-space:nowrap}
 .bar .val{font-size:10.5px; color:var(--ink); font-variant-numeric:tabular-nums; white-space:nowrap}
 .legend{display:flex; gap:16px; font-size:12px; color:var(--sub); margin-top:6px; flex-wrap:wrap}
 .legend i{display:inline-block; width:11px; height:11px; border:1px solid #6f7883; margin-right:5px; vertical-align:-1px}
 .legend i.hq{background:var(--hq)} .legend i.tk{background:var(--tk)}
-.legend i.ik{background:var(--ik)} .legend i.ot{background:var(--ot)}
+.legend i.ik{background:var(--ik)} .legend i.km{background:var(--km)}
+.legend i.ot{background:var(--ot)}
 
 /* ── 操作列 ── */
 .toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px}

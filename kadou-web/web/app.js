@@ -5,7 +5,7 @@
 
 var YEARS = null, DATA = null, MEMO = {},
     DEPTKEY = { '本社営業部': 'hq', '東京営業部': 'tk', '池袋営業部': 'ik',
-                'その他': 'ot' };
+                '生産管理部（工務）': 'km', 'その他': 'ot' };
 var S = { view: 'year', year: null, month: null, dept: '全社', deptC: '全社', monthC: 0,
           monthR: null, machineR: '全機械', q: '', qc: '', qr: '' };
 var MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
@@ -122,7 +122,7 @@ function deptCodeLabel(d) {
 function renderYear() {
   var all = DATA.records, tot = all.reduce(function (s, r) { return s + r.tsu; }, 0);
   // 年間 集計（営業部別）。集計Excelと同じ並び順で、合計を最後に置く
-  var s = ['<thead><tr><th>営業部</th><th class="num">通し数</th>'
+  var s = ['<thead><tr><th>部署</th><th class="num">通し数</th>'
     + '<th class="num">件数</th><th class="num">構成比</th></tr></thead><tbody>'];
   DATA.depts.forEach(function (d) {
     var rs = all.filter(function (r) { return r.dept === d; });
@@ -172,7 +172,7 @@ function renderYear() {
   });
 
   // 月×営業部 マトリクス
-  var t = $('#matrix'), h = '<thead><tr><th>営業部</th>';
+  var t = $('#matrix'), h = '<thead><tr><th>部署</th>';
   MONTHS.forEach(function (m) { h += '<th class="num">' + m + '月</th>'; });
   h += '<th class="num">年間合計</th></tr></thead><tbody>';
   DATA.depts.forEach(function (d) {
@@ -259,7 +259,7 @@ function renderMonth() {
   }
   var all = S.dept === '全社';
   var h = '<thead><tr>'
-    + (all ? '<th>営業部</th>' : '')
+    + (all ? '<th>部署</th>' : '')
     + '<th>管理番号</th><th>ｸﾗｲｱﾝﾄ名</th><th>品名</th>'
     + '<th class="inp">今年の動向</th><th class="inp">無しの場合の代替対策</th><th class="inp num">対策通し数</th>'
     + '<th class="c">営業担当ｺｰﾄﾞ</th><th class="c">印刷日</th><th class="c">色数</th><th class="num">通し数</th>'
@@ -268,7 +268,7 @@ function renderMonth() {
     var m = memoOf(r), fill = (m.trend || m.plan || m.tsu) ? ' filled' : '';
     var tip = '機械: ' + r.machines.join(' / ') + (r.nos.length ? '\n統合した管理番号: ' + r.nos.join(', ') : '');
     h += '<tr data-i="' + r.i + '">'
-      + (all ? '<td>' + esc(r.dept.replace('営業部', '')) + '</td>' : '')
+      + (all ? '<td>' + esc(shortDept(r.dept)) + '</td>' : '')
       + '<td title="' + esc(tip) + '"><a href="#" class="drill" title="日報の元の行を表示">▶</a> '
         + (r.nos.length ? '<b>' + esc(r.no) + '</b><span class="badge">枝番'
         + r.nos.length + '</span>' : esc(r.no)) + '</td>'
@@ -397,6 +397,11 @@ function renderClientControls() {
   $('#qc').oninput = function () { S.qc = this.value; renderClient(); };
 }
 
+/* 得意先別の表に入れる短い部署名（本社営業部→本社、生産管理部（工務）→工務） */
+function shortDept(d) {
+  return d === '生産管理部（工務）' ? '工務' : d.replace('営業部', '');
+}
+
 /* ｸﾗｲｱﾝﾄ名の表記ゆれ吸収キー。
 
    NFKC で ㈱→(株)、半角カナ・全角英数をそろえたうえで、空白と「会社の種類」を
@@ -431,7 +436,7 @@ function clientRows() {
     }
     e.items.sort(function (a, b) { return b.tsu - a.tsu; });
     e.dept = Object.keys(e.depts).sort(function (a, b) { return e.depts[b] - e.depts[a]; })
-      .map(function (d) { return d.replace('営業部', ''); }).join('・');
+      .map(shortDept).join('・');
     return e;
   });
   var q = S.qc.trim().toLowerCase();
@@ -449,7 +454,7 @@ function renderClient() {
   var t = $('#clients');
   if (!rows.length) { t.innerHTML = '<tbody><tr><td class="empty">該当なし</td></tr></tbody>'; return; }
   var h = '<thead><tr><th class="c">順位</th><th>ｸﾗｲｱﾝﾄ名</th>'
-    + (S.deptC === '全社' ? '<th class="c">営業部</th>' : '')
+    + (S.deptC === '全社' ? '<th class="c">部署</th>' : '')
     + '<th class="num">件数</th><th class="num">通し数</th><th class="num">構成比</th>';
   if (one) h += '<th>品名（管理番号 / 通し数）</th>';
   else MONTHS.forEach(function (m) { h += '<th class="num">' + m + '月</th>'; });
@@ -538,11 +543,11 @@ function renderRaw() {
     var cols = ['__機械'].concat(DATA.cols).filter(function (c) {
       return rows.some(function (x) { return x.d[c] !== undefined && x.d[c] !== null && x.d[c] !== ''; });
     });
-    var h = '<thead><tr><th>営業部</th>' + cols.map(function (c) {
+    var h = '<thead><tr><th>部署</th>' + cols.map(function (c) {
       return '<th>' + esc(c === '__機械' ? '機械' : c) + '</th>';
     }).join('') + '</tr></thead><tbody>';
     rows.forEach(function (x) {
-      h += '<tr><td class="c">' + esc(x.dept.replace('営業部', '')) + '</td>' + cols.map(function (c) {
+      h += '<tr><td class="c">' + esc(shortDept(x.dept)) + '</td>' + cols.map(function (c) {
         return '<td class="' + (typeof x.d[c] === 'number' ? 'num' : '') + '">'
           + rawVal(c, x.d[c]) + '</td>';
       }).join('') + '</tr>';
@@ -583,7 +588,7 @@ function csvRaw() {
   var cols = ['__機械'].concat(DATA.cols).filter(function (c) {
     return rows.some(function (x) { return x.d[c] !== undefined && x.d[c] !== null && x.d[c] !== ''; });
   });
-  var out = [['営業部'].concat(cols.map(function (c) { return c === '__機械' ? '機械' : c; }))];
+  var out = [['部署'].concat(cols.map(function (c) { return c === '__機械' ? '機械' : c; }))];
   rows.forEach(function (x) {
     out.push([x.dept].concat(cols.map(function (c) {
       return x.d[c] === undefined || x.d[c] === null ? '' : x.d[c];

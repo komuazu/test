@@ -22,7 +22,8 @@ import xlrd
 # ────────── 確定ルール（kadou-report スキルと同一） ──────────
 DEPTS = OrderedDict([('本社営業部', [1110, 1120]),
                      ('東京営業部', [2100, 2140]),
-                     ('池袋営業部', [3810, 3820])])
+                     ('池袋営業部', [3810, 3820]),
+                     ('生産管理部（工務）', [6930])])
 CODE2DEPT = {c: d for d, cs in DEPTS.items() for c in cs}
 OTHER = 'その他'                      # 上のどれにも当てはまらない営業担当ｺｰﾄﾞ
 ALL_DEPTS = list(DEPTS) + [OTHER]     # 画面と集計に出す並び順

@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """画面の動作確認（Playwright）: 表示・タブ切替・記入欄の保存・合計の再計算・CSV出力"""
 import json
+import os
 import sys
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-URL = 'http://127.0.0.1:8765/'
+# ポートは環境変数 KADOU_PORT で変えられる（既定 8765）
+URL = 'http://127.0.0.1:%s/' % (os.environ.get('KADOU_PORT') or 8765)
 SHOT = Path(sys.argv[1] if len(sys.argv) > 1 else '.')
+CHROMIUM = '/opt/pw-browsers/chromium'      # 用意されていればそれを使う
 ok, ng = [], []
 
 
@@ -17,7 +20,8 @@ def check(cond, msg):
 
 
 with sync_playwright() as pw:
-    b = pw.chromium.launch(executable_path='/opt/pw-browsers/chromium')
+    b = (pw.chromium.launch(executable_path=CHROMIUM) if Path(CHROMIUM).exists()
+         else pw.chromium.launch())
     pg = b.new_page(viewport={'width': 1500, 'height': 1000})
     errors = []
     pg.on('pageerror', lambda e: errors.append(str(e)))
@@ -27,13 +31,13 @@ with sync_playwright() as pw:
     pg.wait_for_selector('#matrix tbody tr')
 
     # ── 年間サマリー ──
-    check(pg.locator('#sum tbody tr').count() == 4, '年間集計が3営業部+合計行')
+    check(pg.locator('#sum tbody tr').count() == 6, '年間集計が5部署+合計行')
     check(pg.locator('#sum tbody tr.total td').first.inner_text().replace(',', '')
-          == '1797000', '年間集計の合計が 1,797,000 通し')
+          == '1874777', '年間集計の合計が 1,874,777 通し（その他を含む）')
     check(pg.locator('#chart .bar').count() == 12, '棒グラフが12か月分')
-    check(pg.locator('#matrix tbody tr').count() == 4, 'マトリクスが3営業部+合計行')
+    check(pg.locator('#matrix tbody tr').count() == 6, 'マトリクスが5部署+合計行')
     total = pg.locator('#matrix tbody tr.total td').last.inner_text()
-    check('1,797,000' in total, '年間合計 1,797,000 通し  → ' + total.replace('\n', ' '))
+    check('1,874,777' in total, '年間合計 1,874,777 通し  → ' + total.replace('\n', ' '))
     pg.screenshot(path=str(SHOT / '01_年間サマリー.png'), full_page=True)
 
     # ── マトリクスの数字から月別明細へジャンプ ──
@@ -46,12 +50,13 @@ with sync_playwright() as pw:
     pg.locator('#pillDept button', has_text='全社').click()
     pg.wait_for_selector('#detail tbody tr')
     rows = pg.locator('#detail tbody tr:not(.total):not(.diff)')
-    check(rows.count() == 5, '1月・全社は5件に統合  → %d件' % rows.count())
+    check(rows.count() == 6, '1月・全社は6件に統合  → %d件' % rows.count())
     check('枝番2' in pg.locator('#detail tbody').inner_text(), '枝番統合のバッジが出る')
     check(pg.locator('#detail td.multi').count() == 2, '複数日にまたがる行の日付が黄色（2件）')
     hdr = pg.locator('#detail thead').inner_text().replace('\n', ' / ')
     check('今年の動向' in hdr and '無しの場合の代替対策' in hdr and '対策通し数' in hdr, '記入欄3列がある')
-    check('94,000' in pg.locator('#detail tbody tr.total').inner_text(), '1月合計 94,000 通し')
+    check('171,777' in pg.locator('#detail tbody tr.total').inner_text(),
+          '1月合計 171,777 通し')
 
     # ── 記入欄に入力 → 合計・差引・充足率が再計算され保存される ──
     first = pg.locator('#detail tbody tr:not(.total):not(.diff)').first
@@ -60,8 +65,9 @@ with sync_playwright() as pw:
     first.locator('input[data-f=tsu]').blur()
     pg.wait_for_timeout(900)
     check(pg.locator('#sumPlan').inner_text() == '12,000', '対策通し数の合計が 12,000')
-    check(pg.locator('#sumDiff').inner_text() == '82,000', '差引が 94,000 − 12,000 = 82,000')
-    check(pg.locator('#sumRate').inner_text() == '12.8%', '充足率 12.8%')
+    check(pg.locator('#sumDiff').inner_text() == '159,777',
+          '差引が 171,777 − 12,000 = 159,777')
+    check(pg.locator('#sumRate').inner_text() == '7.0%', '充足率 7.0%')
     pg.screenshot(path=str(SHOT / '02_月別明細.png'), full_page=True)
 
     memo = json.loads(pg.evaluate("fetch('/api/memo').then(r=>r.text())"))
@@ -91,7 +97,7 @@ with sync_playwright() as pw:
     check(pg.locator('#clients tbody tr').count() > 3, '得意先別が表示される')
     ct = pg.locator('#clients tbody').inner_text()
     check('表記2' in ct, '「㈱アルファ商事」と「（株）アルファ商事」を同一得意先として集計')
-    check('1,797,000' in pg.locator('#clients tbody tr.total').inner_text(),
+    check('1,874,777' in pg.locator('#clients tbody tr.total').inner_text(),
           '得意先別の合計が年間合計と一致')
     pg.screenshot(path=str(SHOT / '03_得意先別.png'), full_page=True)
 
@@ -99,11 +105,11 @@ with sync_playwright() as pw:
     pg.select_option('#selMonthC', '1')
     pg.wait_for_timeout(200)
     crows = pg.locator('#clients tbody tr:not(.total)')
-    check(crows.count() == 5, '1月の得意先別が5社  → %d社' % crows.count())
+    check(crows.count() == 6, '1月の得意先別が6社  → %d社' % crows.count())
     check('品名（管理番号 / 通し数）' in pg.locator('#clients thead').inner_text(),
           '月を選ぶと品名・管理番号の内訳が出る')
-    check('94,000' in pg.locator('#clients tbody tr.total').inner_text(),
-          '1月の得意先別合計が 94,000 で月合計と一致')
+    check('171,777' in pg.locator('#clients tbody tr.total').inner_text(),
+          '1月の得意先別合計が 171,777 で月合計と一致')
     pg.screenshot(path=str(SHOT / '06_得意先別_月別.png'), full_page=True)
     pg.select_option('#selMonthC', '0')
 
@@ -112,7 +118,7 @@ with sync_playwright() as pw:
     pg.select_option('#selMonthR', '1')
     pg.wait_for_selector('#raw tbody tr')
     rr = pg.locator('#raw tbody tr')
-    check(rr.count() == 7, '1月の日報明細が7行（統合前の生の行）  → %d行' % rr.count())
+    check(rr.count() == 8, '1月の日報明細が8行（統合前の生の行）  → %d行' % rr.count())
     rhdr = pg.locator('#raw thead').inner_text()
     check('通し枚数' in rhdr and '表版数' in rhdr and '裏版数' in rhdr, '日報の列がそのまま出る')
     check('通し枚数（集計）' in rhdr, '2か所に出る同名列は「（集計）」で区別される')
@@ -127,7 +133,8 @@ with sync_playwright() as pw:
     # 機械での絞り込み
     pg.select_option('#selMachineR', '新26・A全UV稼動日報')
     pg.wait_for_timeout(200)
-    check(pg.locator('#raw tbody tr').count() == 4, '機械で絞り込める（A全UVは1月4行）')
+    check(pg.locator('#raw tbody tr').count() == 5,
+          '機械で絞り込める（A全UVは1月5行）  → %d行' % pg.locator('#raw tbody tr').count())
     pg.select_option('#selMachineR', '全機械')
 
     # ── 月別明細から日報の元の行を開く ──

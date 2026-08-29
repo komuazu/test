@@ -191,7 +191,13 @@ def main():
               '2026年は明細71行 → 69件に統合')
 
         d26 = json.loads((out / 'data_2026.json').read_text(encoding='utf-8'))
-        check(d26['depts'][-1] == 'その他', '営業部の並びの最後が「その他」')
+        check(d26['depts'][-1] == 'その他', '並びの最後が「その他」')
+        check(d26['depts'] == ['本社営業部', '東京営業部', '池袋営業部',
+                               '生産管理部（工務）', 'その他'],
+              '営業部の並び  → %s' % '、'.join(d26['depts']))
+        from kadou_core import CODE2DEPT                          # noqa: PLC0415
+        check(CODE2DEPT.get(6930) == '生産管理部（工務）',
+              'ｺｰﾄﾞ6930は生産管理部（工務）')
         check(d26['deptCodes']['その他'] == [9999],
               '「その他」に入ったコードを画面用に持たせる  → %s'
               % d26['deptCodes']['その他'])
