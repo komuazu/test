@@ -24,6 +24,8 @@ DEPTS = OrderedDict([('本社営業部', [1110, 1120]),
                      ('東京営業部', [2100, 2140]),
                      ('池袋営業部', [3810, 3820])])
 CODE2DEPT = {c: d for d, cs in DEPTS.items() for c in cs}
+OTHER = 'その他'                      # 上のどれにも当てはまらない営業担当ｺｰﾄﾞ
+ALL_DEPTS = list(DEPTS) + [OTHER]     # 画面と集計に出す並び順
 
 NEED = ('日付', '管理番号', '営業担当ｺｰﾄﾞ', '品名', '通し枚数', '表版数', '裏版数')
 OPTIONAL = ('ｸﾗｲｱﾝﾄ名',)
@@ -188,10 +190,11 @@ def extract_sheet(sh, machine, src):
             continue
         code = cell(sh, r, M['営業担当ｺｰﾄﾞ'])
         code = int(code) if isinstance(code, float) else code
-        if code not in CODE2DEPT:
-            continue
+        if not isinstance(code, int):
+            continue                           # 担当ｺｰﾄﾞが数字でない行は明細ではない
         out.append({
-            'dept':    CODE2DEPT[code],
+            # 3営業部のコード以外は「その他」にまとめる（落とさずに数える）
+            'dept':    CODE2DEPT.get(code, OTHER),
             'code':    code,
             'no':      cell(sh, r, M['管理番号']),
             'base':    basno(cell(sh, r, M['管理番号'])),

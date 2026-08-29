@@ -4,7 +4,8 @@
 'use strict';
 
 var YEARS = null, DATA = null, MEMO = {},
-    DEPTKEY = { '本社営業部': 'hq', '東京営業部': 'tk', '池袋営業部': 'ik' };
+    DEPTKEY = { '本社営業部': 'hq', '東京営業部': 'tk', '池袋営業部': 'ik',
+                'その他': 'ot' };
 var S = { view: 'year', year: null, month: null, dept: '全社', deptC: '全社', monthC: 0,
           monthR: null, machineR: '全機械', q: '', qc: '', qr: '' };
 var MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
@@ -110,6 +111,14 @@ function render() {
 }
 
 /* 年間サマリー */
+/* 営業部の見出しに添える営業担当ｺｰﾄﾞ。「その他」は数が多くなるので4つまで出す */
+function deptCodeLabel(d) {
+  var cs = DATA.deptCodes[d] || [];
+  if (!cs.length) { return ''; }
+  return cs.length > 4 ? cs.slice(0, 4).join(' / ') + ' ほか' + (cs.length - 4) + '件'
+                       : cs.join(' / ');
+}
+
 function renderYear() {
   var all = DATA.records, tot = all.reduce(function (s, r) { return s + r.tsu; }, 0);
   // 年間 集計（営業部別）。集計Excelと同じ並び順で、合計を最後に置く
@@ -119,7 +128,7 @@ function renderYear() {
     var rs = all.filter(function (r) { return r.dept === d; });
     var t = rs.reduce(function (a, r) { return a + r.tsu; }, 0);
     s.push('<tr><th class="rh">' + esc(d)
-      + '<small>' + esc(DATA.deptCodes[d].join(' / ')) + '</small></th>'
+      + '<small>' + esc(deptCodeLabel(d)) + '</small></th>'
       + '<td class="num">' + num(t) + '</td>'
       + '<td class="num">' + num(rs.length) + '</td>'
       + '<td class="num">' + (tot ? (t / tot * 100).toFixed(1) : '0.0') + '%</td></tr>');
@@ -139,6 +148,9 @@ function renderYear() {
     });
     return o;
   });
+  $('#legend').innerHTML = DATA.depts.map(function (d) {
+    return '<span><i class="' + DEPTKEY[d] + '"></i>' + esc(d) + '</span>';
+  }).join('');
   var max = Math.max.apply(null, per.map(function (o) { return o.total; }).concat([1]));
   var c = $('#chart'); c.innerHTML = '';
   per.forEach(function (o) {
@@ -385,10 +397,16 @@ function renderClientControls() {
   $('#qc').oninput = function () { S.qc = this.value; renderClient(); };
 }
 
-/* ｸﾗｲｱﾝﾄ名の表記ゆれ吸収キー（集計スキルと同じ NFKC 正規化）。
-   「㈱アルファ商事」と「（株）アルファ商事」を同じ得意先として数える。 */
+/* ｸﾗｲｱﾝﾄ名の表記ゆれ吸収キー。
+
+   NFKC で ㈱→(株)、半角カナ・全角英数をそろえたうえで、空白と「会社の種類」を
+   表す語を落とす。日報では同じ得意先でも（株）が付いたり付かなかったりするため、
+   「武陽ｶﾞｽ（株）」「武陽ガス」「武陽ガス株式会社」を同じ得意先として数える。
+   落とすと空になる名前（「（株）」だけ など）は、落とす前をそのまま使う。 */
+var CORPWORD = /株式会社|有限会社|合同会社|合名会社|合資会社|\(株\)|\(有\)|\(名\)|\(資\)|\(同\)/g;
 function ckey(s) {
-  return String(s || '').normalize('NFKC').replace(/[\s\u3000]/g, '');
+  var t = String(s || '').normalize('NFKC').replace(/[\s　]/g, '');
+  return t.replace(CORPWORD, '') || t;
 }
 
 function clientRows() {

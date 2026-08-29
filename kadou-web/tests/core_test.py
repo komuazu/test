@@ -6,6 +6,7 @@
 ダミーの稼動日報を作って、確定ルールどおりに読めているかを確かめる。
 """
 import datetime
+import json
 import shutil
 import sys
 import tempfile
@@ -154,11 +155,13 @@ def main():
               '日次集計ブロック（有効時間など）を別に拾う')
 
         rows = got[26][1]
-        check(len(rows) == 4, '26年1月の明細は4行（対象外コード9999と日次集計は除く）')
+        check(len(rows) == 5, '26年1月の明細は5行（日次集計ブロックは除く）')
         check(all(r['tsu'] != 999999 for r in rows),
               '通し枚数は本刷ブロックを採る（集計ブロックの値を拾わない）')
-        check(all(r['code'] in (1110, 1120, 2100, 2140, 3810, 3820) for r in rows),
-              '対象の営業担当ｺｰﾄﾞだけ')
+        check([r['dept'] for r in rows if r['code'] == 9999] == ['その他'],
+              '3営業部のどれでもないコード9999は「その他」に入る')
+        check(sum(1 for r in rows if r['dept'] != 'その他') == 4,
+              '3営業部の行はこれまでどおり4行')
 
         # ── 管理番号の統合ルール ──
         gs = sort_groups(consolidate([r for r in rows if r['dept'] == '本社営業部']))
@@ -181,12 +184,21 @@ def main():
         check((out / 'years.json').exists(), 'years.json ができる')
 
         y26 = [y for y in m['years'] if y['year'] == 2026][0]
-        check(y26['tsu'] == 1797000, '2026年の通し数 1,797,000  → %s' % format(y26['tsu'], ','))
-        check(y26['detail'] == 70 and y26['records'] == 68,
-              '2026年は明細70行 → 68件に統合')
+        check(y26['tsu'] == 1874777,
+              '2026年の通し数 1,874,777（その他77,777を含む）  → %s'
+              % format(y26['tsu'], ','))
+        check(y26['detail'] == 71 and y26['records'] == 69,
+              '2026年は明細71行 → 69件に統合')
+
+        d26 = json.loads((out / 'data_2026.json').read_text(encoding='utf-8'))
+        check(d26['depts'][-1] == 'その他', '営業部の並びの最後が「その他」')
+        check(d26['deptCodes']['その他'] == [9999],
+              '「その他」に入ったコードを画面用に持たせる  → %s'
+              % d26['deptCodes']['その他'])
+        check(sum(r['tsu'] for r in d26['records'] if r['dept'] == 'その他') == 77777,
+              '「その他」の通し数が集計に入る')
 
         # 統合の前後で通し数が変わらないこと（全年）
-        import json
         bad = []
         for y in years:
             d = json.loads((out / ('data_%d.json' % y)).read_text(encoding='utf-8'))

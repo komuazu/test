@@ -30,7 +30,8 @@ from collections import OrderedDict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kadou_core import DEPTS, consolidate, extract_all, sort_groups   # noqa: E402
+from kadou_core import (ALL_DEPTS, DEPTS, OTHER, consolidate,     # noqa: E402
+                        extract_all, sort_groups)
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / 'web'
@@ -351,10 +352,13 @@ def prefer_new(part):
 def build_year(year, by_month, daily_by_month, cols, files, src, warnings):
     """1年ぶんのデータを組み立てる（統合ルールは kadou-report と同じ）"""
     records, stats = [], []
+    # 「その他」に入った営業担当ｺｰﾄﾞ（画面の見出しに出す）
+    other_codes = sorted({r['code'] for rr in by_month.values() for r in rr
+                          if r['dept'] == OTHER})
     for month in sorted(by_month):
         rows = by_month[month]
         rows.sort(key=lambda x: (x['date'], str(x['no']), x['seq']))
-        for dept in DEPTS:
+        for dept in ALL_DEPTS:
             drows = [r for r in rows if r['dept'] == dept]
             groups = sort_groups(consolidate(drows))
             for i, g in enumerate(groups):
@@ -402,8 +406,8 @@ def build_year(year, by_month, daily_by_month, cols, files, src, warnings):
         'year':      year,
         'generated': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
         'source':    str(src),
-        'depts':     list(DEPTS),
-        'deptCodes': {d: cs for d, cs in DEPTS.items()},
+        'depts':     list(ALL_DEPTS),
+        'deptCodes': dict({d: cs for d, cs in DEPTS.items()}, **{OTHER: other_codes}),
         'months':    sorted(by_month),
         'files':     yfiles,
         'stats':     stats,
