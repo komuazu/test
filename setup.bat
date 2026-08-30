@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 set REPO=https://github.com/komuazu/test.git
-set BRANCH=claude/factory-report-folder-check-b7a9kx
+set BRANCH=main
 set DIR=arunasiweb
 set TARGET=%CD%\%DIR%
 
@@ -44,9 +44,11 @@ if exist "%DIR%\.git" (
   rem まだ送っていない変更があるときは、上書きせずに止める
   git diff-index --quiet HEAD --
   if errorlevel 1 goto :dirty
-  git fetch origin %BRANCH%
+  git fetch origin
   if errorlevel 1 goto :fetchfail
-  git checkout %BRANCH%
+  rem 前は作業用の枝を見ていた。main へ乗り換えられるよう -B で作り直す
+  git checkout -B %BRANCH% origin/%BRANCH%
+  if errorlevel 1 goto :fetchfail
   git pull origin %BRANCH%
   popd
   goto :done

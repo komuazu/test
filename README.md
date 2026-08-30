@@ -34,7 +34,7 @@ GitHub の画面でこのファイルを開き、右上の **Download raw file**
 
 ```bat
 cd C:\Users\<ユーザー名>\Desktop
-git clone -b claude/factory-report-folder-check-b7a9kx https://github.com/komuazu/test.git arunasiweb
+git clone https://github.com/komuazu/test.git arunasiweb
 ```
 
 ### 2. アプリを開く
