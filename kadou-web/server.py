@@ -129,12 +129,22 @@ def read_json(path):
         return None
 
 
+def mtime(path):
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def load_memo():
-    """記入欄の内容を読む。中身の多い方を採る
+    """記入欄の内容を読む。あとから書かれた方を採る
 
     アプリのフォルダ（memo.json）と、PCのユーザーフォルダ（MEMO_HOME）の両方に
     同じものを書いている。アプリを入れ替えたり作り直したりしてフォルダ側が
     無くなっても、ユーザーフォルダ側から戻せるようにするため。
+
+    以前は「件数の多い方」を採っていたが、それだと画面で消した記入欄が
+    控えから戻ってきてしまう。いまは新しい方を採り、中身が空の方は採らない。
     """
     a, b = read_json(MEMO), read_json(MEMO_HOME)
     if a is None and b is None:
@@ -144,7 +154,9 @@ def load_memo():
     if a is None:
         print('記入欄の内容を %s から戻しました。' % MEMO_HOME)
         return b
-    if b is not None and len(b) > len(a):
+    if b is None or (a and not b):
+        return a
+    if (b and not a) or mtime(MEMO_HOME) > mtime(MEMO):
         print('記入欄の内容を %s から戻しました（%d件）。' % (MEMO_HOME, len(b)))
         return b
     return a
@@ -400,7 +412,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({'ok': False, 'error': 'もう一度開き直してください。'}, 401)
 
             if self.path.startswith('/api/memo'):
-                # {key: {trend, plan, tsu}} を差分マージする
+                # {key: {trend, plan, tsu}} を差分マージする。
+                # 値が null のキーは「画面で消した」ぶんなので取り除く。
                 memo = load_memo()
                 for k, v in self._body().items():
                     if v and any(str(x).strip() for x in v.values()):

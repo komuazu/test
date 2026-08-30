@@ -4,6 +4,9 @@
 'use strict';
 
 var YEARS = null, DATA = null, MEMO = {},
+    /* PEND = まだサーバーに届いていない記入欄。値が null なら「消した」。
+       手元（localStorage）にも同じものを置き、届くまで消さない。 */
+    PEND = {},
     DEPTKEY = { '本社営業部': 'hq', '東京営業部': 'tk', '池袋営業部': 'ik',
                 '生産管理部（工務）': 'km', 'その他': 'ot' };
 var S = { view: 'year', year: null, month: null, dept: '全社', deptC: '全社', monthC: 0,
@@ -35,15 +38,29 @@ var el = function (tag, cls, html) {
    years.json（そのフォルダにどの年が入っているか）を読んでから、その年のデータを読む。
    13年〜25年のように複数年あるフォルダでも、画面上部で年を切り替えられる。 */
 function boot() {
+  PEND = loadPend();                     // 前回送れずに残った分（閉じ方が急でも拾える）
   Promise.all([
     fetch('years.json?t=' + Date.now()).then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; }),
-    fetch('/api/memo').then(function (r) { return r.ok ? r.json() : {}; })
-      .catch(function () { return localMemo(); })
+    fetch('/api/memo?t=' + Date.now()).then(function (r) {
+      if (!r.ok) { throw new Error('記入欄を読めませんでした'); }
+      return r.json();
+    }).then(function (m) { return { memo: m || {}, live: true }; })
+      .catch(function () { return { memo: localMemo(), live: false }; })
   ]).then(function (a) {
     YEARS = a[0];
-    MEMO = a[1] || {};
+    MEMO = a[1].memo;
+    // サーバーから読めなかったときは、手元の控えを丸ごと「まだ送っていない分」に
+    // する。つながり次第サーバーへ書き戻すので、記入欄が消えたままにならない。
+    if (!a[1].live) {
+      Object.keys(MEMO).forEach(function (k) {
+        if (!(k in PEND)) { PEND[k] = MEMO[k]; }
+      });
+    }
+    applyPend();                         // 前回閉じたときに送れなかった分
     indexMemo();
+    writeLocal();
+    if (hasPend()) { save(); }           // それをすぐ送り直す
     if (!YEARS || !YEARS.years || !YEARS.years.length) {
       $('#selYear').innerHTML = '';
       $('#warns').innerHTML = '<div class="warn"><b>データがありません。</b>'
@@ -80,6 +97,7 @@ function loadYear(year) {
     })
     .then(function (d) {
       DATA = d;
+      indexKeys();
       S.year = year;
       S.month = S.monthR = DATA.months[DATA.months.length - 1];
       S.monthC = 0;
@@ -96,15 +114,48 @@ function say(html, ms) {
   var e = $('#saved');
   if (!e) { return; }
   e.innerHTML = html;
-  e.classList.add('on');
+  e.className = 'saved on';
+  e.title = '';
   clearTimeout(sayTimer);
-  sayTimer = setTimeout(function () {
-    e.classList.remove('on');
-    e.textContent = '保存しました';
-  }, ms || 2000);
+  sayTimer = setTimeout(function () { showNote(false); }, ms || 2000);
 }
 
-function localMemo() { try { return JSON.parse(localStorage.getItem('kadouMemo') || '{}'); } catch (e) { return {}; } }
+/* 保存の状態。ng（保存できていない）のときは消さずに出しっぱなしにする。
+   ヘッダのボタンを押し下げないよう、札は短く。わけは吹き出しに回す。 */
+var noteTimer = null, NOTE = { msg: '保存しました', cls: 'ok', tip: '' };
+function note(msg, cls, ms, tip) {
+  NOTE = { msg: msg, cls: cls, tip: tip || '' };
+  showNote(true);
+  clearTimeout(noteTimer);
+  if (ms) { noteTimer = setTimeout(function () { showNote(false); }, ms); }
+}
+function showNote(on) {
+  var e = $('#saved');
+  if (!e) { return; }
+  e.textContent = NOTE.msg;
+  e.title = NOTE.tip;
+  e.className = 'saved ' + NOTE.cls + ((on || NOTE.cls === 'ng') ? ' on' : '');
+}
+
+/* ── 記入欄の手元の控え ──
+   サーバーへ送るのは 0.4秒まとめてからなので、その間に画面を閉じられても
+   消えないよう、打った時点で localStorage にも置く。送れたぶんだけ PEND から
+   外すので、送れていない分は次に開いたときに必ず送り直される。 */
+var LS_MEMO = 'kadouMemo', LS_PEND = 'kadouMemoPend';
+
+function localMemo() { try { return JSON.parse(localStorage.getItem(LS_MEMO) || '{}') || {}; } catch (e) { return {}; } }
+function loadPend() { try { return JSON.parse(localStorage.getItem(LS_PEND) || '{}') || {}; } catch (e) { return {}; } }
+function hasPend() { return Object.keys(PEND).length > 0; }
+function applyPend() {
+  Object.keys(PEND).forEach(function (k) {
+    if (PEND[k]) { MEMO[k] = PEND[k]; } else { delete MEMO[k]; }
+  });
+}
+function writePend() { try { localStorage.setItem(LS_PEND, JSON.stringify(PEND)); } catch (e) { /* 容量超過は無視 */ } }
+function writeLocal() {
+  writePend();
+  try { localStorage.setItem(LS_MEMO, JSON.stringify(MEMO)); } catch (e) { /* 容量超過は無視 */ }
+}
 
 /* ── 抽出ヘルパ ── */
 function recs(month, dept) {
@@ -124,14 +175,29 @@ function indexMemo() {
   MEMOIDX = {};
   Object.keys(MEMO).forEach(function (k) {
     var p = k.split('|');
-    if (p.length === 4) { MEMOIDX[key2(p[0], p[1], p[3])] = MEMO[k]; }
+    if (p.length === 4) { MEMOIDX[key2(p[0], p[1], p[3])] = k; }
   });
 }
 
-function memoOf(r) {
-  return MEMO[key(r)] || MEMOIDX[key2(DATA.year, r.m, r.no)]
-    || { trend: '', plan: '', tsu: '' };
+/* いまの表にある目印の一覧。ほかの行のものを取り違えないための照合用 */
+var KEYSET = {};
+function indexKeys() {
+  KEYSET = {};
+  DATA.records.forEach(function (r) { KEYSET[key(r)] = 1; });
 }
+
+/* その行の記入欄が実際に入っているキー。部署名がいまと違っていても拾う。
+   直すときにこのキーから作り直さないと、触っていない欄まで空になる。
+   ただし、同じ月・同じ管理番号が別の部署にも並ぶことが実データで133件ある。
+   その部署が「いまの表にある」なら別の行のものなので、拾わない。 */
+function memoKey(r) {
+  var k = key(r);
+  if (MEMO[k]) { return k; }
+  var o = MEMOIDX[key2(DATA.year, r.m, r.no)];
+  return (o && MEMO[o] && !KEYSET[o]) ? o : k;
+}
+
+function memoOf(r) { return MEMO[memoKey(r)] || { trend: '', plan: '', tsu: '' }; }
 function planTsu(r) { var v = parseFloat(String(memoOf(r).tsu).replace(/[^0-9.-]/g, '')); return isFinite(v) ? v : 0; }
 
 /* ── 描画 ── */
@@ -755,18 +821,29 @@ function autosize(f) {
   f.style.height = Math.max(26, f.scrollHeight) + 'px';
 }
 
-var saveTimer = null;
+var saveTimer = null, retryTimer = null, sending = false;
+
 function onEdit(f, now) {
   var tr = f.closest('tr'), r = DATA.records[+tr.dataset.i];
-  var k = key(r), m = MEMO[k] || { trend: '', plan: '', tsu: '' };
+  var k = key(r), old = memoKey(r), b = MEMO[old] || {};
+  // いま入っている値から作り直す。MEMO[k] だけを見ていたころは、部署名が
+  // 変わった行を1欄だけ直すと、触っていない残り2欄が空になっていた。
+  var m = { trend: b.trend || '', plan: b.plan || '', tsu: b.tsu || '' };
   m[f.dataset.f] = f.value;
-  if (m.trend || m.plan || m.tsu) MEMO[k] = m; else delete MEMO[k];
+  if (old !== k && MEMO[old]) {          // 古い部署名のぶんは、いまの目印へ寄せる
+    delete MEMO[old];
+    PEND[old] = null;
+  }
+  if (m.trend || m.plan || m.tsu) { MEMO[k] = m; PEND[k] = m; }
+  else { delete MEMO[k]; PEND[k] = null; }   // 消したことも伝える（黙って戻らないように）
+  indexMemo();
+  writePend();                           // 打った時点で手元に残す
   tr.querySelectorAll('td.inp').forEach(function (td) {
     td.classList.toggle('filled', !!(m.trend || m.plan || m.tsu));
   });
   updateTotals();
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(save, now ? 0 : 700);
+  saveTimer = setTimeout(save, now ? 0 : 400);
 }
 
 function updateTotals() {
@@ -781,19 +858,71 @@ function updateTotals() {
   if ($('#sumRate')) $('#sumRate').textContent = tot ? (pt / tot * 100).toFixed(1) + '%' : '－';
 }
 
+/* まだ送っていない分だけをサーバーへ送る。
+   ・送れた分だけ PEND から外す（送っている間に直した分は残す）
+   ・失敗したら手元に持ったまま、5秒ごとに送り直す
+   ・成功も失敗も同じ「保存しました」を出していたので、気づけなかった */
 function save() {
-  indexMemo();
-  try { localStorage.setItem('kadouMemo', JSON.stringify(MEMO)); } catch (e) { /* 容量超過は無視 */ }
+  clearTimeout(retryTimer);
+  if (!hasPend() || sending) { return; }
+  var sent = {};
+  Object.keys(PEND).forEach(function (k) { sent[k] = PEND[k]; });
+  sending = true;
+  note('保存中…', 'busy', 0);
   fetch('/api/memo', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(MEMO)
-  }).then(function () { flash(); }).catch(function () { flash(); });
+    body: JSON.stringify(sent)
+  }).then(function (r) {
+    if (!r.ok) { throw new Error('HTTP ' + r.status); }
+    return r.json();
+  }).then(function (j) {
+    if (!j || j.ok !== true) { throw new Error('ことわられました'); }
+    sending = false;
+    Object.keys(sent).forEach(function (k) {
+      if (sameMemo(PEND[k], sent[k])) { delete PEND[k]; }
+    });
+    writeLocal();
+    note('保存しました', 'ok', 1200);
+    if (hasPend()) { clearTimeout(saveTimer); saveTimer = setTimeout(save, 200); }
+  }).catch(function () {
+    sending = false;
+    note('保存できていません', 'ng', 0,
+         'つながり次第もう一度保存します。'
+         + 'この画面を閉じても入力は残っているので、開き直せば保存されます。');
+    retryTimer = setTimeout(save, 5000);
+  });
 }
 
-function flash() {
-  var s = $('#saved'); s.classList.add('on');
-  setTimeout(function () { s.classList.remove('on'); }, 1200);
+function sameMemo(a, b) {
+  if (!a || !b) { return !a && !b; }
+  return a.trend === b.trend && a.plan === b.plan && a.tsu === b.tsu;
 }
+
+/* 画面を閉じる・再読込するときに、まだ送っていない分を投げておく。
+   0.4秒まとめる間にリロードされると、入力が丸ごと消えていた。
+   sendBeacon は画面が閉じたあとも送り切ってくれる。 */
+function flush() {
+  if (!hasPend()) { return; }
+  var body = JSON.stringify(PEND);
+  try {
+    if (navigator.sendBeacon
+        && navigator.sendBeacon('/api/memo', new Blob([body], { type: 'application/json' }))) {
+      return;
+    }
+  } catch (e) { /* 下の fetch で送る */ }
+  try {
+    fetch('/api/memo', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: body, keepalive: true
+    });
+  } catch (e) { /* 手元に残っているので、次に開いたとき送り直す */ }
+}
+
+window.addEventListener('pagehide', flush);
+window.addEventListener('beforeunload', flush);
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'hidden') { flush(); }
+});
 
 /* 得意先別 */
 function renderClientControls() {

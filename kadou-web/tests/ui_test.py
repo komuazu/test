@@ -185,6 +185,98 @@ with sync_playwright() as pw:
     check(kept2.locator('textarea[data-f=trend]').input_value() == '継続（前年並み）',
           '部署の分け方が変わっても記入欄は残る（管理番号で探し直す）')
 
+    # ── 記入欄が消えないこと ──
+    # 「入力してリロードすると消える」という申し出があった箇所。
+    # 4つとも実際に消えていたので、順に確かめる。
+    def to_month():
+        pg.wait_for_selector('#matrix tbody tr')
+        pg.locator('nav.tabs button[data-view=month]').click()
+        pg.select_option('#selMonth', '1')
+        pg.locator('#pillDept button', has_text='全社').click()
+        pg.wait_for_selector('#detail tbody tr')
+
+    def row(n):
+        return pg.locator('#detail tbody tr:not(.total):not(.diff)').nth(n)
+
+    def srv_memo():
+        return json.loads(pg.evaluate("fetch('/api/memo').then(r=>r.text())"))
+
+    # (1) 部署ちがいで拾った行を1欄だけ直しても、触っていない欄が残る
+    row(0).locator('textarea[data-f=plan]').fill('内製に切替')
+    row(0).locator('textarea[data-f=plan]').blur()
+    pg.wait_for_timeout(700)
+    pg.reload()
+    to_month()
+    check(row(0).locator('textarea[data-f=trend]').input_value() == '継続（前年並み）'
+          and row(0).locator('input[data-f=tsu]').input_value() == '12000'
+          and row(0).locator('textarea[data-f=plan]').input_value() == '内製に切替',
+          '1欄だけ直しても、触っていない欄が消えない')
+    check(not [k for k in srv_memo() if 'ちがう部署' in k],
+          '古い部署名の記入欄は、いまの部署のほうへ寄せて片付ける')
+
+    # (2) 打ってすぐ（まとめて送る前に）リロードしても消えない
+    row(1).locator('textarea[data-f=trend]').click()
+    pg.keyboard.type('すぐリロード')
+    pg.wait_for_timeout(120)                     # 0.4秒のまとめ書きを待たずに
+    pg.reload()
+    to_month()
+    check(row(1).locator('textarea[data-f=trend]').input_value() == 'すぐリロード',
+          '打ってすぐリロードしても記入欄が消えない')
+
+    # (3) 消したら、リロードしても戻ってこない
+    row(1).locator('textarea[data-f=trend]').fill('')
+    row(1).locator('textarea[data-f=trend]').blur()
+    pg.wait_for_timeout(700)
+    pg.reload()
+    to_month()
+    check(row(1).locator('textarea[data-f=trend]').input_value() == '',
+          '消した記入欄がリロードで戻ってこない')
+
+    # (4) 保存できないときは、そう出る。つながったら送り直す
+    nerr = len(errors)                           # ここから先はわざと通信を止める
+    pg.route('**/api/memo',
+             lambda rt: rt.abort() if rt.request.method == 'POST' else rt.continue_())
+    row(2).locator('textarea[data-f=trend]').fill('つながらない時の入力')
+    row(2).locator('textarea[data-f=trend]').blur()
+    pg.wait_for_timeout(900)
+    lbl = pg.locator('#saved')
+    check('保存できていません' in lbl.inner_text()
+          and lbl.evaluate("e => e.classList.contains('on')"),
+          '保存できないときは「保存できていません」と出したままにする')
+    pg.unroute('**/api/memo')
+    pg.reload()
+    to_month()
+    pg.wait_for_timeout(900)
+    check(row(2).locator('textarea[data-f=trend]').input_value() == 'つながらない時の入力',
+          'つながらないあいだの入力も、つながったら保存し直される')
+    check(any(v.get('trend') == 'つながらない時の入力' for v in srv_memo().values()),
+          '送り直した記入欄が memo.json に入る')
+    errors[nerr:] = [e for e in errors[nerr:]
+                     if 'ERR_FAILED' not in e and 'Failed to load resource' not in e]
+
+    # (5) 閉じぎわの送信も間に合わなかった場合（ブラウザが落ちた・電源が切れた）
+    #     手元の控えだけが残った状態を作り、開き直して送り直されるか見る
+    FAKE = "(function(){ var p = Object.keys(MEMO)[0].split('|');"           " return [p[0], p[1], p[2], '9999999'].join('|'); })()"
+    pg.evaluate("(function(){ var o = {};"
+                " o[%s] = { trend: '落ちる直前の入力', plan: '', tsu: '' };"
+                " localStorage.setItem('kadouMemoPend', JSON.stringify(o)); })()" % FAKE)
+    pg.reload()
+    to_month()
+    pg.wait_for_timeout(900)
+    check(any(v.get('trend') == '落ちる直前の入力' for v in srv_memo().values()),
+          '閉じぎわの送信も間に合わなかった分を、開き直したときに保存し直す')
+    pg.evaluate("(function(){ var o = {}; o[%s] = null;"
+                " return fetch('/api/memo', { method: 'POST',"
+                " headers: {'Content-Type': 'application/json'},"
+                " body: JSON.stringify(o) }); })()" % FAKE)
+    pg.wait_for_timeout(400)
+
+    # 後片付け（あとの合計の確かめに響かせない）
+    for n in (1, 2):
+        row(n).locator('textarea[data-f=trend]').fill('')
+        row(n).locator('textarea[data-f=trend]').blur()
+    pg.wait_for_timeout(700)
+
     # ── 絞り込み ──
     pg.fill('#q', 'アルファ')
     pg.wait_for_timeout(200)
