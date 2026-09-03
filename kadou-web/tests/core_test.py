@@ -221,6 +221,18 @@ def check_xlsx():
           '印刷範囲は2行目から（見出しが1ページ目で二重にならない）')
     check('Meiryo' in z_styles and 'charset val="128"' in z_styles,
           '日本語のフォントで書き出す')
+    # ヘッダーは開いたときではなく印刷するときに読まれる。フォントの指定を
+    # &"名前,字体" の形で書かないと、開けるのに印刷でつまずく。
+    check('&amp;"Meiryo,Regular"' in sh,
+          'ヘッダーのフォントを &"名前,字体" の形で書く（印刷時に読まれる）')
+    check('&amp;P / &amp;N' in sh, 'ヘッダーにページ番号が入る')
+
+    # ヘッダーの中では & が命令の合図なので、文字としての & は && にする
+    d3 = xlsx.build([['得意先'], ['A&B商事']], 'A&B 集計')
+    with zipfile.ZipFile(io.BytesIO(d3)) as z3:
+        sh3 = z3.read('xl/worksheets/sheet1.xml').decode('utf-8')
+    check('&amp;&amp;B 集計' in sh3,
+          'シート名の & はヘッダーで && に直す（印刷が崩れないように）')
     # 壊れた値が混ざってもファイルとして壊れない
     d2 = xlsx.build([['名前', '数'], ['制御\x0b文字\x00入り', float('nan')],
                      ['ふつう', 12]], '2026/8 [試] 小森1号機')

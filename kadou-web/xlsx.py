@@ -19,6 +19,9 @@
       印刷範囲は2行目から
     - フォントは日本語グリフを持つ Meiryo。欧文専用フォントや、この環境に
       無いフォントを指定すると、印刷時の差し替えでExcelが不安定になる
+    - ヘッダーの中のフォント指定は &"名前,字体" と字体まで書く。字体を省くと
+      Excel はここを解釈できない。ヘッダーは開いたときではなく印刷するときに
+      読まれるので、開けるのに印刷だけ失敗する形になる
 """
 import math
 import re
@@ -27,6 +30,11 @@ from io import BytesIO
 
 MAXW, MINW = 48, 8
 FONT = 'Meiryo'
+# ヘッダー／フッターの中でフォントを指定する書き方は &"フォント名,字体" で、
+# 字体まで書くのが決まり（Excel 自身もそう書く）。字体を省くと Excel は
+# ここを解釈できず、開けるのに印刷でつまずく。ヘッダーは開いたときではなく
+# 印刷するときに読まれるので、印刷だけが失敗する形になる。
+FONT_HF = FONT + ',Regular'
 
 # XML 1.0 で使えない制御文字（これが混ざると Excel はファイルを開けない）
 CTRL = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
@@ -99,6 +107,15 @@ def sheet_xml(rows, ncol):
     return ''.join(out)
 
 
+def header_text(s):
+    """ヘッダーに入れる文字列を用意する
+
+    ヘッダーの中では & が命令の合図（&P はページ番号など）なので、
+    文字としての & は && と重ねて書く。そのうえで XML として書き出す。
+    """
+    return esc(str(s).replace('&', '&&'))
+
+
 def build(rows, sheet_name='集計'):
     """表（1行目が見出し）から .xlsx のバイト列を作る"""
     rows = [list(r) for r in rows] or [['']]
@@ -137,7 +154,7 @@ def build(rows, sheet_name='集計'):
         '&amp;R&amp;"%s"&amp;9 &amp;P / &amp;N</oddHeader></headerFooter>'
         '</worksheet>'
         % (last, cols, sheet_xml(rows, ncol), last,
-           FONT, esc(name).replace('&amp;', '&amp;&amp;'), FONT))
+           FONT_HF, header_text(name), FONT_HF))
 
     # 印刷タイトル（見出し行の繰り返し）と印刷範囲。
     # 繰り返す1行目が印刷範囲に入っていると1ページ目で二重に印刷されるため、
