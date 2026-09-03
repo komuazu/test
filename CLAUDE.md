@@ -104,7 +104,7 @@ for p in sorted(glob.glob(r'web\data_*.json')):
 ## 4. テストの動かし方
 
 ```bash
-python tests/core_test.py                                  # 93項目
+python tests/core_test.py                                  # 101項目
 python tests/make_fixture.py <一時フォルダ>
 python server.py --src <一時フォルダ> --src /no/such/folder --no-browser &
 python tests/ui_test.py                                    # 122項目
@@ -128,6 +128,11 @@ python tests/ui_test.py                                    # 122項目
   > 不合格」と何度も報告してしまった。HEAD でも再現したのは同じ間違った引数で
   > 走らせていたからで、正しく渡せば **122 / 122 全部通る**。
   > テストが落ちたら、まず自分の走らせ方を疑うこと。
+
+* **ダミー日報を置く一時フォルダの名前は何でもよい。** 以前は「設定に現在の
+  フォルダが入る」の項目が名前に `sample` が入る前提になっていて、別の名前で
+  作ると1件落ちた。いまは `/api/config` の中身と突き合わせているので、
+  フォルダ名に依存しない（`srcAlt` の予備パスも画面に出るぶんだけ数える）
 * ダミー日報（`make_fixture.py`）は数字を**割り切れる形**にしてある。
   有効時間8.0h／やれ＝通しの5%／基準予備＝通しの10% → 損紙率 4.55%、予備率 10.00%
 

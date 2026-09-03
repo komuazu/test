@@ -536,7 +536,16 @@ with sync_playwright() as pw:
     # ── 設定ダイアログ ──
     pg.click('#btnSetting')
     pg.wait_for_timeout(300)
-    check('sample' in pg.locator('#inSrc').input_value(), '設定に現在のフォルダが入る')
+    # 一時フォルダの名前に依存しないよう、サーバーの設定と突き合わせる
+    # （以前は 'sample' を含む名前で作った前提になっていて、別の名前で作ると落ちた）
+    cfg = json.loads(pg.evaluate("fetch('/api/config').then(r=>r.text())"))
+    want = cfg['src'] if isinstance(cfg['src'], list) else [cfg['src']]
+    for x in cfg.get('srcAlt') or []:          # 画面は予備のパスも続けて出す
+        if x not in want:
+            want.append(x)
+    shown = [x.strip() for x in pg.locator('#inSrc').input_value().splitlines() if x.strip()]
+    check(shown == [str(x) for x in want],
+          '設定に今の読込元フォルダがそのまま入る  → %d件' % len(shown))
     check('今回読み込んだフォルダ' in pg.locator('#altNote').inner_text(),
           '実際に読み込んだフォルダが分かる')
     pg.click('#dlgCancel')
