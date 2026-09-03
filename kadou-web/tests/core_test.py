@@ -202,6 +202,7 @@ def check_xlsx():
         names = z.namelist()
         sh = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
         wbx = z.read('xl/workbook.xml').decode('utf-8')
+        z_styles = z.read('xl/styles.xml').decode('utf-8')
     check('xl/styles.xml' in names and 'xl/workbook.xml' in names,
           '中身が Excel の形になっている')
     check('<v>12345</v>' in sh, '数値は文字ではなく数値のまま入る')
@@ -209,6 +210,28 @@ def check_xlsx():
     check('autoFilter' in sh and 'state="frozen"' in sh,
           '見出し行の固定とオートフィルタが付く')
     check('前年との比較' in wbx, 'シート名が付く')
+    # 印刷まわり（ここが空だとExcelが自前の既定で組版することになる）
+    check('<pageSetup' in sh and 'paperSize="9"' in sh and 'landscape' in sh
+          and 'fitToWidth="1"' in sh, '印刷設定が入る（A4横・横1ページ）')
+    check('<pageMargins' in sh and 'fitToPage="1"' in sh and '<printOptions' in sh,
+          '余白と横1ページの指定が入る')
+    check('_xlnm.Print_Titles' in wbx and '$1:$1' in wbx,
+          '見出し行が各ページの先頭で繰り返される')
+    check('_xlnm.Print_Area' in wbx and '$A$2:' in wbx,
+          '印刷範囲は2行目から（見出しが1ページ目で二重にならない）')
+    check('Meiryo' in z_styles and 'charset val="128"' in z_styles,
+          '日本語のフォントで書き出す')
+    # 壊れた値が混ざってもファイルとして壊れない
+    d2 = xlsx.build([['名前', '数'], ['制御\x0b文字\x00入り', float('nan')],
+                     ['ふつう', 12]], '2026/8 [試] 小森1号機')
+    with zipfile.ZipFile(io.BytesIO(d2)) as z2:
+        sh2 = z2.read('xl/worksheets/sheet1.xml').decode('utf-8')
+        wb2 = z2.read('xl/workbook.xml').decode('utf-8')
+    check('制御文字入り' in sh2 and '\x0b' not in sh2,
+          '制御文字は落とす（混ざるとExcelがファイルを開けない）')
+    check('<v>nan</v>' not in sh2, 'nan・inf を数値として書かない')
+    check('name="2026-8 試 小森1号機"' in wb2,
+          'シート名に使えない文字を直す  → 2026-8 試 小森1号機')
 
 
 def check_shared():

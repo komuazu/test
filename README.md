@@ -6,6 +6,9 @@
 アプリ本体は **[`kadou-web/`](kadou-web/)** にあります。使い方・集計ルールは
 [kadou-web/README.md](kadou-web/README.md) をご覧ください。
 
+稼動日報から営業部別の **.xlsx** を直接作るスキルの中身は
+**[`kadou-report/`](kadou-report/)** にあります。
+
 ```
 kadou-web/起動.bat    ← アプリを開く
 プッシュ.bat           ← 変更を GitHub に送る（このフォルダ）

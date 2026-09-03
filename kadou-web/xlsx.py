@@ -7,15 +7,37 @@
   ・1行目を見出しとして色と罫線を付け、上で固定してオートフィルタを付ける
   ・数値は数値のまま入れて 3桁区切りで表示する（文字列にしない）
   ・列幅は中身の長さに合わせる（全角は2文字ぶんで数える）
+  ・印刷の設定（A4横・横1ページ・見出し行の繰り返し・余白）まで入れる
+
+印刷まわりについて（2026-09）
+    以前は印刷の設定を1つも書いていなかったため、Excelが自前の既定で
+    組版することになり、開けるのに印刷でつまずく、という状態だった。
+    いまは Excel が自分で保存するときと同じ要素（sheetPr / printOptions /
+    pageMargins / pageSetup / 印刷タイトル）をそろえて書いている。
+    - 見出し行は各ページの先頭で繰り返す（印刷タイトル = 1行目）
+    - 繰り返す行が印刷範囲の中にあると1ページ目で二重に出るので、
+      印刷範囲は2行目から
+    - フォントは日本語グリフを持つ Meiryo。欧文専用フォントや、この環境に
+      無いフォントを指定すると、印刷時の差し替えでExcelが不安定になる
 """
+import math
+import re
 import zipfile
 from io import BytesIO
 
 MAXW, MINW = 48, 8
+FONT = 'Meiryo'
+
+# XML 1.0 で使えない制御文字（これが混ざると Excel はファイルを開けない）
+CTRL = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+# シート名に使えない文字（区切りの / \ は - に、ほかは落とす）
+SLASH = re.compile(r"[/\\]")
+BADSHEET = re.compile(r"[\[\]:*?]")
 
 
 def esc(s):
-    return (str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    s = CTRL.sub('', str(s))
+    return (s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             .replace('"', '&quot;'))
 
 
@@ -38,7 +60,22 @@ def width_of(v):
 
 
 def is_num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """数値として書けるか（nan・inf は Excel が読めないので文字として書く）"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    return not isinstance(v, float) or math.isfinite(v)
+
+
+def sheet_title(name):
+    """Excel が受け付けるシート名にする（使えない文字と長さの制限）"""
+    s = CTRL.sub('', str(name))
+    s = BADSHEET.sub('', SLASH.sub('-', s)).strip().strip("'")[:31]
+    return s or '集計'
+
+
+def quoted(name):
+    """数式・定義名の中で使うシート名  例: 'と'を含む名前 → '''を含む名前'"""
+    return "'%s'" % esc(name).replace("'", "''")
 
 
 def sheet_xml(rows, ncol):
@@ -67,7 +104,9 @@ def build(rows, sheet_name='集計'):
     rows = [list(r) for r in rows] or [['']]
     ncol = max(len(r) for r in rows)
     nrow = len(rows)
-    last = '%s%d' % (col_name(ncol - 1), nrow)
+    name = sheet_title(sheet_name)
+    lastcol = col_name(ncol - 1)
+    last = '%s%d' % (lastcol, nrow)
 
     widths = []
     for c in range(ncol):
@@ -80,21 +119,56 @@ def build(rows, sheet_name='集計'):
     sheet = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>'
         '<dimension ref="A1:%s"/>'
         '<sheetViews><sheetView workbookViewId="0" tabSelected="1">'
         '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+        '<selection pane="bottomLeft" activeCell="A2" sqref="A2"/>'
         '</sheetView></sheetViews>'
         '<sheetFormatPr defaultRowHeight="15"/>'
         '<cols>%s</cols><sheetData>%s</sheetData>'
         '<autoFilter ref="A1:%s"/>'
-        '</worksheet>' % (last, cols, sheet_xml(rows, ncol), last))
+        '<printOptions horizontalCentered="1"/>'
+        '<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6"'
+        ' header="0.3" footer="0.3"/>'
+        '<pageSetup paperSize="9" orientation="landscape"'
+        ' fitToWidth="1" fitToHeight="0"/>'
+        '<headerFooter><oddHeader>&amp;L&amp;"%s"&amp;10 %s'
+        '&amp;R&amp;"%s"&amp;9 &amp;P / &amp;N</oddHeader></headerFooter>'
+        '</worksheet>'
+        % (last, cols, sheet_xml(rows, ncol), last,
+           FONT, esc(name).replace('&amp;', '&amp;&amp;'), FONT))
+
+    # 印刷タイトル（見出し行の繰り返し）と印刷範囲。
+    # 繰り返す1行目が印刷範囲に入っていると1ページ目で二重に印刷されるため、
+    # 印刷範囲は2行目から。明細が無いときは範囲を作らない。
+    q = quoted(name)
+    names = ['<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'
+             '%s!$A$1:$%s$%d</definedName>' % (q, lastcol, nrow)]
+    if nrow > 1:
+        names.append('<definedName name="_xlnm.Print_Titles" localSheetId="0">'
+                     '%s!$1:$1</definedName>' % q)
+        names.append('<definedName name="_xlnm.Print_Area" localSheetId="0">'
+                     '%s!$A$2:$%s$%d</definedName>' % (q, lastcol, nrow))
+
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<workbookPr/>'
+        '<bookViews><workbookView activeTab="0"/></bookViews>'
+        '<sheets><sheet name="%s" sheetId="1" r:id="rId1"/></sheets>'
+        '<definedNames>%s</definedNames>'
+        '<calcPr calcId="124519"/>'
+        '</workbook>' % (esc(name), ''.join(names)))
 
     styles = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
         '<fonts count="2">'
-        '<font><sz val="11"/><name val="Yu Gothic UI"/></font>'
-        '<font><b/><sz val="11"/><name val="Yu Gothic UI"/></font>'
+        '<font><sz val="11"/><name val="%s"/><family val="3"/><charset val="128"/></font>'
+        '<font><b/><sz val="11"/><name val="%s"/><family val="3"/>'
+        '<charset val="128"/></font>'
         '</fonts>'
         '<fills count="3">'
         '<fill><patternFill patternType="none"/></fill>'
@@ -120,14 +194,10 @@ def build(rows, sheet_name='集計'):
         ' applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>'
         '</cellXfs>'
         '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
-        '</styleSheet>')
-
-    workbook = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
-        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        '<sheets><sheet name="%s" sheetId="1" r:id="rId1"/></sheets></workbook>'
-        % esc(sheet_name[:31] or '集計'))
+        '<dxfs count="0"/>'
+        '<tableStyles count="0" defaultTableStyle="TableStyleMedium9"'
+        ' defaultPivotStyle="PivotStyleLight16"/>'
+        '</styleSheet>' % (FONT, FONT))
 
     buf = BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
