@@ -232,8 +232,10 @@ def check_xlsx():
           '余白と横1ページの指定が入る')
     check('_xlnm.Print_Titles' in wbx and '$1:$1' in wbx,
           '見出し行が各ページの先頭で繰り返される')
-    check('_xlnm.Print_Area' in wbx and '$A$2:' in wbx,
-          '印刷範囲は2行目から（見出しが1ページ目で二重にならない）')
+    # 印刷範囲(Print_Area)は入れない。Excel も openpyxl も普段は作らない形で、
+    # 入れても出力は変わらないことを実際に印刷して確かめた。印刷でつまずく
+    # 元を減らすため、余計なものは書かない。
+    check('_xlnm.Print_Area' not in wbx, '印刷範囲(Print_Area)は書かない')
     check('Meiryo' in z_styles and 'charset val="128"' in z_styles,
           '日本語のフォントで書き出す')
     # ヘッダーは開いたときではなく印刷するときに読まれる。フォントの指定を

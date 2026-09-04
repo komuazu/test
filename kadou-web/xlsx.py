@@ -15,8 +15,8 @@
     いまは Excel が自分で保存するときと同じ要素（sheetPr / printOptions /
     pageMargins / pageSetup / 印刷タイトル）をそろえて書いている。
     - 見出し行は各ページの先頭で繰り返す（印刷タイトル = 1行目）
-    - 繰り返す行が印刷範囲の中にあると1ページ目で二重に出るので、
-      印刷範囲は2行目から
+    - 印刷範囲(Print_Area)は入れない。Excel も openpyxl も普段は作らない形で、
+      入れても出力は変わらないことを実際に印刷して確かめた
     - フォントは日本語グリフを持つ Meiryo。欧文専用フォントや、この環境に
       無いフォントを指定すると、印刷時の差し替えでExcelが不安定になる
     - ヘッダーの中のフォント指定は &"名前,字体" と字体まで書く。字体を省くと
@@ -160,17 +160,20 @@ def build(rows, sheet_name='集計'):
         % (last, cols, sheet_xml(rows, ncol), last,
            FONT_HF, header_text(name), FONT_HF))
 
-    # 印刷タイトル（見出し行の繰り返し）と印刷範囲。
-    # 繰り返す1行目が印刷範囲に入っていると1ページ目で二重に印刷されるため、
-    # 印刷範囲は2行目から。明細が無いときは範囲を作らない。
+    # 印刷タイトル（見出し行を各ページの先頭で繰り返す）。
+    #
+    # 以前はここに印刷範囲(Print_Area)も入れ、しかも「繰り返す1行目が範囲に
+    # 入っていると1ページ目で二重に出る」と考えて2行目からにしていた。
+    # 実際に印刷して確かめたところ、範囲を 1行目から / 2行目から / 範囲なし の
+    # どれにしても出力は同じ（見出しは1回だけ）で、細工は要らなかった。
+    # 範囲が2行目から始まる書き方は Excel も openpyxl も普段は作らない形なので、
+    # 印刷でつまずく元を減らすためにやめている。
     q = quoted(name)
     names = ['<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'
              '%s!$A$1:$%s$%d</definedName>' % (q, lastcol, nrow)]
     if nrow > 1:
         names.append('<definedName name="_xlnm.Print_Titles" localSheetId="0">'
                      '%s!$1:$1</definedName>' % q)
-        names.append('<definedName name="_xlnm.Print_Area" localSheetId="0">'
-                     '%s!$A$2:$%s$%d</definedName>' % (q, lastcol, nrow))
 
     workbook = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
