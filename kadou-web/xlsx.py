@@ -23,11 +23,15 @@
       Excel はここを解釈できない。ヘッダーは開いたときではなく印刷するときに
       読まれるので、開けるのに印刷だけ失敗する形になる
 """
+import datetime as _dt
 import math
 import re
 import zipfile
 from io import BytesIO
 
+from xl_theme import THEME1
+
+NOW = _dt.datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ')
 MAXW, MINW = 48, 8
 FONT = 'Meiryo'
 # ヘッダー／フッターの中でフォントを指定する書き方は &"フォント名,字体" で、
@@ -232,6 +236,12 @@ def build(rows, sheet_name='集計'):
                    'worksheet+xml"/>'
                    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.'
                    'openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+                   '<Override PartName="/xl/theme/theme1.xml" ContentType="application/'
+                   'vnd.openxmlformats-officedocument.theme+xml"/>'
+                   '<Override PartName="/docProps/core.xml" ContentType="application/'
+                   'vnd.openxmlformats-package.core-properties+xml"/>'
+                   '<Override PartName="/docProps/app.xml" ContentType="application/'
+                   'vnd.openxmlformats-officedocument.extended-properties+xml"/>'
                    '</Types>')
         z.writestr('_rels/.rels',
                    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -239,7 +249,14 @@ def build(rows, sheet_name='集計'):
                    '2006/relationships">'
                    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
                    'officeDocument/2006/relationships/officeDocument"'
-                   ' Target="xl/workbook.xml"/></Relationships>')
+                   ' Target="xl/workbook.xml"/>'
+                   '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/'
+                   'package/2006/relationships/metadata/core-properties"'
+                   ' Target="docProps/core.xml"/>'
+                   '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/'
+                   'officeDocument/2006/relationships/extended-properties"'
+                   ' Target="docProps/app.xml"/>'
+                   '</Relationships>')
         z.writestr('xl/_rels/workbook.xml.rels',
                    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
@@ -249,7 +266,33 @@ def build(rows, sheet_name='集計'):
                    ' Target="worksheets/sheet1.xml"/>'
                    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/'
                    'officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+                   '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/'
+                   'officeDocument/2006/relationships/theme"'
+                   ' Target="theme/theme1.xml"/>'
                    '</Relationships>')
+        # Excel が保存するときと同じ部品をそろえる。テーマ（配色とフォントの
+        # 定義）が無いと、開けても印刷（＝描画）でつまずくことがある。
+        z.writestr('docProps/core.xml',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<cp:coreProperties'
+                   ' xmlns:cp="http://schemas.openxmlformats.org/package/2006/'
+                   'metadata/core-properties"'
+                   ' xmlns:dc="http://purl.org/dc/elements/1.1/"'
+                   ' xmlns:dcterms="http://purl.org/dc/terms/"'
+                   ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+                   '<dc:title>%s</dc:title>'
+                   '<dcterms:created xsi:type="dcterms:W3CDTF">%s</dcterms:created>'
+                   '<dcterms:modified xsi:type="dcterms:W3CDTF">%s</dcterms:modified>'
+                   '</cp:coreProperties>' % (esc(name), NOW, NOW))
+        z.writestr('docProps/app.xml',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Properties xmlns="http://schemas.openxmlformats.org/'
+                   'officeDocument/2006/extended-properties"'
+                   ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/'
+                   '2006/docPropsVTypes">'
+                   '<Application>Microsoft Excel</Application>'
+                   '</Properties>')
+        z.writestr('xl/theme/theme1.xml', THEME1)
         z.writestr('xl/workbook.xml', workbook)
         z.writestr('xl/styles.xml', styles)
         z.writestr('xl/worksheets/sheet1.xml', sheet)

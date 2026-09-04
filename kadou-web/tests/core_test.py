@@ -205,11 +205,26 @@ def check_xlsx():
         z_styles = z.read('xl/styles.xml').decode('utf-8')
     check('xl/styles.xml' in names and 'xl/workbook.xml' in names,
           '中身が Excel の形になっている')
+    # Excel が保存するときと同じ部品をそろえる。テーマが無いファイルは、
+    # 開けても印刷（＝描画）でつまずくことがある。
+    check('xl/theme/theme1.xml' in names, 'テーマ(theme1.xml)を同梱する')
+    check('docProps/core.xml' in names and 'docProps/app.xml' in names,
+          '文書情報(docProps)を同梱する')
     check('<v>12345</v>' in sh, '数値は文字ではなく数値のまま入る')
     check('s="1"' in sh and 'customWidth' in sh, '見出しの飾りと列幅が付く')
     check('autoFilter' in sh and 'state="frozen"' in sh,
           '見出し行の固定とオートフィルタが付く')
     check('前年との比較' in wbx, 'シート名が付く')
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        rels = z.read('xl/_rels/workbook.xml.rels').decode('utf-8')
+        root = z.read('_rels/.rels').decode('utf-8')
+        ct = z.read('[Content_Types].xml').decode('utf-8')
+    check('theme/theme1.xml' in rels and 'relationships/theme' in rels,
+          'テーマが workbook から参照されている')
+    check('docProps/core.xml' in root and 'docProps/app.xml' in root,
+          '文書情報が参照されている')
+    check('theme+xml' in ct and 'core-properties+xml' in ct,
+          '足した部品が [Content_Types].xml に登録されている')
     # 印刷まわり（ここが空だとExcelが自前の既定で組版することになる）
     check('<pageSetup' in sh and 'paperSize="9"' in sh and 'landscape' in sh
           and 'fitToWidth="1"' in sh, '印刷設定が入る（A4横・横1ページ）')
