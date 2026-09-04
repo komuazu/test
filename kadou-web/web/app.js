@@ -1884,8 +1884,53 @@ function setPrintTitle() {
     + '<small>' + esc('読込 ' + DATA.generated) + '</small>';
 }
 
+/* 記入欄の中身を、印刷用の文字に写す
+
+   入力ボックス（textarea / input）は紙では意味がないうえ、高さが残るせいで
+   1行36pxになり、A4横1ページに13行しか入らなくなる。1500行の月別明細で
+   117ページになり、印刷プレビューが出てこなかった。印刷の直前に中身を
+   文字へ写し、箱は印刷CSSで隠す。 */
+function flattenFields() {
+  $$('#detail td.inp, #raw td.inp').forEach(function (td) {
+    var f = td.querySelector('textarea, input');
+    if (!f) { return; }
+    var pv = td.querySelector('.pv');
+    if (!pv) {
+      pv = el('span', 'pv' + (f.classList.contains('num') ? ' num' : ''));
+      td.appendChild(pv);
+    }
+    pv.textContent = f.value;
+  });
+}
+
+function unflattenFields() {
+  $$('#detail .pv, #raw .pv').forEach(function (x) { x.remove(); });
+}
+
+/* 何ページくらいになるか。A4横1枚の中身は約718px */
+function printPages() {
+  var sec = $('section.view.on');
+  return sec ? Math.max(1, Math.ceil(sec.getBoundingClientRect().height / 718)) : 1;
+}
+
+var BIG_PAGES = 20;        // これを超えるときは一度確かめる
+
 function printView(hint) {
   setPrintTitle();
+  flattenFields();
+  var pages = printPages();
+  if (pages > BIG_PAGES) {
+    var rows = $$('section.view.on tbody tr').length;
+    if (!window.confirm(
+        'この表は ' + num(rows) + '行あり、およそ ' + pages + 'ページになります。\n'
+        + 'このまま印刷すると、時間がかかるか、途中で止まることがあります。\n\n'
+        + '「キャンセル」を押して、月や営業部を選ぶか、絞り込みで減らすことを'
+        + 'おすすめします。\n表だけ必要なときは「Excelで保存」が確実です。\n\n'
+        + 'それでも印刷しますか？')) {
+      unflattenFields();
+      return;
+    }
+  }
   if (hint) {
     say('印刷画面の「送信先（プリンター）」で <b>PDFとして保存</b> を'
       + '選んでください', 6000);
@@ -1894,6 +1939,10 @@ function printView(hint) {
     window.print();
   }
 }
+
+// ブラウザの印刷（Ctrl+P）から入ったときも同じようにする
+window.addEventListener('beforeprint', flattenFields);
+window.addEventListener('afterprint', unflattenFields);
 
 $('#btnPrint').onclick = function () { printView(false); };
 $('#btnPrintTop').onclick = function () { printView(false); };

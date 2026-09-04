@@ -210,6 +210,15 @@ dialog .df button.pri{background:var(--navy); color:#fff; border-color:var(--nav
   /* 段や行が多い表は、印刷では詰めてA4横1枚に収める */
   #matrix th,#matrix td,#operDay th,#operDay td,
   #wasteRank th,#wasteRank td{padding:1px 5px; line-height:1.35}
+  /* 行数の多い明細も詰める。ここを詰めないと1ページ13行しか入らず、
+     1500行で117ページになって印刷プレビューが出てこない */
+  #detail th,#detail td,#raw th,#raw td{padding:1px 5px; line-height:1.3}
+  /* 記入欄の入力ボックスは紙では意味がない。印刷の直前に中身を
+     文字へ写して（app.js の flattenFields）、箱の方は隠す */
+  td.inp textarea,td.inp input{display:none}
+  td.inp .pv{display:block; color:#000; white-space:pre-wrap; word-break:break-all}
+  td.inp .pv.num{text-align:right}
+  td.inp{background:#fff}
   /* 稼働率は「機械別の年間」と「日ごと」を別々の紙に出す */
   #v-oper .card + .card{break-before:page; page-break-before:always}
   thead th{position:static}

@@ -533,6 +533,46 @@ with sync_playwright() as pw:
     else:
         check(True, '年が1つだけのフォルダ（年の切替は非表示）')
 
+    # ── 印刷 ──
+    # 記入欄の入力ボックスは紙では意味がないうえ、高さが残ると1行36pxになり
+    # A4横1ページに13行しか入らない。1500行の月別明細で117ページになり、
+    # 印刷プレビューが出てこなかった。印刷の直前に中身を文字へ写し、
+    # 箱の方は印刷CSSで隠す。
+    pg.locator('nav.tabs button[data-view=month]').click()
+    pg.select_option('#selMonth', '1')
+    pg.wait_for_selector('#detail tbody tr')
+    pg.evaluate('(() => { window.__printed = 0;'
+                ' window.print = function () { window.__printed++; }; })()')
+    dialogs = []
+    pg.on('dialog', lambda d: (dialogs.append(d.message), d.dismiss()))
+
+    pg.evaluate('window.dispatchEvent(new Event("beforeprint"))')
+    pv = pg.evaluate("document.querySelectorAll('#detail td.inp .pv').length")
+    check(pv > 0, '印刷の直前に記入欄の中身を文字へ写す  → %d個' % pv)
+    txt = pg.evaluate(
+        "[...document.querySelectorAll('#detail td.inp .pv')].map(x=>x.textContent)"
+        ".filter(x=>x).join('|')")
+    check('継続（前年並み）' in txt and '12000' in txt, '写した文字に入力した内容が入る')
+    pg.evaluate('window.dispatchEvent(new Event("afterprint"))')
+    check(pg.evaluate("document.querySelectorAll('#detail .pv').length") == 0,
+          '印刷が終わったら写しを片付ける')
+
+    pg.click('#btnPrint')
+    pg.wait_for_timeout(500)
+    check(not dialogs and pg.evaluate('window.__printed') == 1,
+          '小さい表は確認なしで印刷する')
+
+    # 紙が増えるときは一度確かめる（しきい値を下げて同じ枝を通す）
+    pg.evaluate('BIG_PAGES = 0')
+    pg.click('#btnPrint')
+    pg.wait_for_timeout(500)
+    check(len(dialogs) == 1 and 'ページになります' in dialogs[0],
+          '紙が増えるときは枚数を知らせて確かめる')
+    check(pg.evaluate('window.__printed') == 1, 'キャンセルすれば印刷しない')
+    check(pg.evaluate("document.querySelectorAll('#detail .pv').length") == 0,
+          'キャンセルしたら写しも片付ける')
+    pg.evaluate('BIG_PAGES = 20')
+
     # ── 設定ダイアログ ──
     pg.click('#btnSetting')
     pg.wait_for_timeout(300)

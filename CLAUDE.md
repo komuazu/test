@@ -104,10 +104,10 @@ for p in sorted(glob.glob(r'web\data_*.json')):
 ## 4. テストの動かし方
 
 ```bash
-python tests/core_test.py                                  # 101項目
+python tests/core_test.py                                  # 109項目
 python tests/make_fixture.py <一時フォルダ>
 python server.py --src <一時フォルダ> --src /no/such/folder --no-browser &
-python tests/ui_test.py                                    # 122項目
+python tests/ui_test.py                                    # 129項目
 ```
 
 * **画面テストは `web/` を作り直す。** 必ず**フォルダごとコピーした場所**で動かす
@@ -244,6 +244,53 @@ server.MEMO / server.MEMO_HOME を一時フォルダへ差し替えてから動�
 
 検証で見つかった問題を直したら、**もう一度同じ検証を走らせる**。
 `core_test.py` と `ui_test.py` も通し直す。
+
+---
+
+## 6.5 印刷でつまずいたときに見るところ
+
+「印刷できない・プレビューが出ない・落ちる」は、**紙の枚数**を先に疑う。
+
+> **実際にあったこと**
+> 記入欄の入力ボックス（textarea）が印刷でも高さを持ったままで、**1行36px**に
+> なっていた。A4横1ページ（中身 718px）に**13行**しか入らず、実データ量の
+> 月別明細1,500行が**117ページ**。プレビューが出てこないのは当然だった。
+> 入力ボックスは紙では意味がないので、印刷の直前に中身を文字へ写して
+> （`flattenFields`）、箱は印刷CSSで隠す。117 → 45ページになった。
+
+* 行の多い表（`#detail` `#raw`）は印刷で `padding:1px 5px` に詰める
+* それでも20ページを超えるときは、印刷前に枚数を出して確かめる（`BIG_PAGES`）
+* 枚数は `page.pdf()` で測れる。1ページの中身は 1047×718px
+
+```python
+# 実データ量（1年6機械18,000行）のダミーで測る
+pdf = pg.pdf(format='A4', landscape=True)
+pages = pdf.count(b'/Type /Page')
+```
+
+### Excelファイルが印刷できないとき
+
+`xlsx.py` は手で .xlsx を組み立てているので、**Excel が必ず書く部品**が
+欠けやすい。欠けても開けるが、印刷（＝描画）でつまずく。
+
+| 部品 | なぜ要る |
+|---|---|
+| `xl/theme/theme1.xml` | 配色とフォントの定義。印刷時の描画で参照される |
+| `docProps/core.xml` `app.xml` | 文書情報 |
+| ヘッダーのフォント指定 | `&"名前,字体"` と字体まで書く。ヘッダーは**印刷時に読まれる** |
+
+確かめ方は、同じ内容を openpyxl で作って**部品の一覧を突き合わせる**のが速い。
+
+```python
+a = set(zipfile.ZipFile('当方.xlsx').namelist())
+d = set(zipfile.ZipFile('openpyxl製.xlsx').namelist())
+print(sorted(d - a))     # 当方に無い部品
+```
+
+**LibreOffice で印刷を試すなら `libreoffice-calc` が入っているか先に見る。**
+入っていないと、どんな正しいファイルでも
+`source file could not be loaded` になる。openpyxl 製のファイルも読めるか
+確かめてから「再現した」と言うこと（一度これで誤報しかけた）。
 
 ---
 
