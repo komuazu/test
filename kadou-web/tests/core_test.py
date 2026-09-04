@@ -263,6 +263,95 @@ def check_xlsx():
           'シート名に使えない文字を直す  → 2026-8 試 小森1号機')
 
 
+def check_cache(tmp):
+    """2回目以降は、変わっていない年を読み直さないか
+
+    去年より前の日報は内容が決まっている。書き変わるのは当月ぶんだけなので、
+    2回目からは今年のファイルだけ読めば足りる。実データ（13年・78ファイル）で
+    起動が25秒→0秒になった仕組み。速いだけでなく、全部読み直したときと
+    中身が同じであることが大事。
+    """
+    import contextlib                                            # noqa: PLC0415
+    import io                                                    # noqa: PLC0415
+
+    src = tmp / 'cache_src'
+    make_multi(src)                      # 2023〜2025年、年ごとに2ファイル
+    out, full = tmp / 'cache_out', tmp / 'cache_full'
+
+    def run(**kw):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            m = build.build([str(src)], None, str(out), **kw)
+        return m, buf.getvalue().count('  読込 ')
+
+    def data(d, y):
+        x = json.loads((Path(d) / ('data_%d.json' % y)).read_text(encoding='utf-8'))
+        x.pop('generated', None)
+        return x
+
+    def tsu(m, y):
+        return [x['tsu'] for x in m['years'] if x['year'] == y][0]
+
+    m1, n1 = run()
+    check(n1 == 6, '1回目は全部読む  → %d件' % n1)
+    base = tsu(m1, 2024)
+
+    m2, n2 = run()
+    check(n2 == 0, '2回目は1件も読まない（変わっていないため）  → %d件' % n2)
+    check([y['year'] for y in m2['years']] == [y['year'] for y in m1['years']],
+          '読まなくても年の一覧は同じ')
+    check(tsu(m2, 2024) == base, '読まなくても集計は同じ')
+
+    # ある年の日報が書き変わったら、その年だけ読み直す
+    f = src / '★新・24年稼動' / '新24・A全UV稼動日報.xls'
+    f.touch()
+    m3, n3 = run()
+    check(n3 == 2, '書き変わった年のファイルだけ読む（2024年の2件）  → %d件' % n3)
+    check(tsu(m3, 2024) == base, '読み直しても集計は変わらない')
+
+    # ファイルが消えたら、その年から外れる
+    keep = f.read_bytes()
+    f.unlink()
+    m4, _ = run()
+    check(tsu(m4, 2024) < base, 'ファイルが消えたら、その年の集計が減る')
+
+    # 戻したら（＝新しいファイルが増えたのと同じ）、元に戻る
+    f.write_bytes(keep)
+    m5, n5 = run()
+    check(tsu(m5, 2024) == base,
+          'ファイルが増えたら、その年を作り直して元に戻る  → %s' % format(tsu(m5, 2024), ','))
+    check(n5 == 2, '増えた年のファイルをそろえて読む  → %d件' % n5)
+
+    # 出来上がりを消したら作り直す
+    (out / 'data_2023.json').unlink()
+    run()
+    check((out / 'data_2023.json').exists(), '出来上がりを消したら作り直す')
+
+    # 控えが壊れていたら全部読み直す
+    (out / 'cache.json').write_text('こわれています', encoding='utf-8')
+    _m, n6 = run()
+    check(n6 == 6, '控えが壊れていたら全部読み直す  → %d件' % n6)
+
+    # 読込元フォルダを変えたら、作り直さない年があっても一覧に出る。
+    # 読込元は年ごとではなく「今回の読み込み」の情報なので、年のデータの中の
+    # 古い値ではなく years.json を見る必要がある。
+    _m7, n7 = run()
+    check(n7 == 0, '（下の確認の前に）読み直しは起きていない  → %d件' % n7)
+    with contextlib.redirect_stdout(io.StringIO()):
+        m8 = build.build([str(src), str(tmp / 'ありません')], None, str(out))
+    check(str(tmp / 'ありません') in (m8.get('skipped') or []),
+          '無かったフォルダは、作り直さない年があっても一覧に出る')
+    check(m8.get('sources') == [str(src)], '読込元フォルダも今回のものになる')
+
+    # 何より大事: 途中で作り直した結果が、全部読み直したときと同じであること
+    with contextlib.redirect_stdout(io.StringIO()):
+        build.build([str(src)], None, str(full), fresh=True)
+    years = sorted(int(p.stem.split('_')[1]) for p in Path(full).glob('data_*.json'))
+    diff = [y for y in years if data(out, y) != data(full, y)]
+    check(not diff, '少しずつ作り直した結果が、全部読み直したときと同じ  → %s'
+          % (diff or '全年一致'))
+
+
 def check_shared():
     """共有モード（社内サーバーに置いたとき）の守りが効いているか
 
@@ -529,6 +618,9 @@ def main():
         check_xlsx()
         check_memo(tmp)
         check_shared()
+
+        # ── 2回目以降の読み込みを省くしくみ ──
+        check_cache(tmp)
 
         # ── 元ファイルを変更していないこと ──
         before = sorted((p.name, p.stat().st_size, int(p.stat().st_mtime))

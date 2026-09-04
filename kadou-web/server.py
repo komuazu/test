@@ -254,17 +254,20 @@ def print_sources(cands):
             print('    %s  （見つかりません）' % c)
 
 
-def rebuild(cfg):
+def rebuild(cfg, fresh=False):
     """稼動日報フォルダを読み直して web/ のデータを作り直す
 
     year が空なら、フォルダに入っている年を全部作る（13年〜25年のような
     複数年フォルダに対応するため）。
+
+    2回目からは、変わっていない年は読み直さない（去年より前の日報は内容が
+    決まっているため）。fresh=True で控えを無視して全部読み直す。
     """
     sys.path.insert(0, str(HERE))
     import build                                                 # noqa: PLC0415
     year = cfg.get('year')
     return build.build(src_candidates(cfg), int(year) if year else None, WEB,
-                       cfg.get('closed'))
+                       cfg.get('closed'), fresh)
 
 
 LOGIN_HTML = """<!doctype html><html lang="ja"><head><meta charset="utf-8">
@@ -528,6 +531,8 @@ def main():
     p.add_argument('--year', type=int, help='対象年')
     p.add_argument('--port', type=int, help='ポート番号')
     p.add_argument('--no-build', action='store_true', help='読み直さず前回のデータで起動')
+    p.add_argument('--fresh', action='store_true',
+                   help='前回の控えを使わず、全部読み直す')
     p.add_argument('--no-browser', action='store_true', help='ブラウザを自動で開かない')
     p.add_argument('--host', default='127.0.0.1',
                    help='待ち受けるアドレス（社内で共有するときは 0.0.0.0）')
@@ -555,7 +560,7 @@ def main():
         print('稼動日報を読み込んでいます …')
         print_sources(src_candidates(cfg))
         try:
-            rebuild(cfg)
+            rebuild(cfg, a.fresh)
             print('読み込み完了\n')
         except SystemExit as e:
             print('  [エラー] %s' % e)

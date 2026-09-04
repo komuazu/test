@@ -18,7 +18,8 @@ SKIP_FILES = {'config.json', 'memo.json', 'memo.json.tmp', 'make_zip.py', '.giti
 def is_generated(rel):
     """起動のたびに作り直されるデータは配布物に入れない"""
     return rel.parent.name == 'web' and (
-        rel.name == 'years.json' or rel.name.startswith('data_') or rel.name == 'data.json')
+        rel.name in ('years.json', 'cache.json', 'data.json')
+        or rel.name.startswith('data_'))
 
 
 def main():

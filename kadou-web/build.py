@@ -233,10 +233,15 @@ def report_files(folder, kind):
 
 
 def file_key(p):
-    """同じファイル（名前・サイズ・更新日時が同じ）かどうかの目印"""
+    """同じファイル（名前・大きさ・更新日時が同じ）かどうかの目印
+
+    更新日時は秒ではなくナノ秒まで見る。秒までだと、日報を保存した直後に
+    読み込んだときに「変わっていない」と誤って判断してしまう。
+    2回目以降に読み直すかどうかの判断にも、この目印を使っている。
+    """
     try:
         st = p.stat()
-        return (p.name, st.st_size, int(st.st_mtime))
+        return (p.name, st.st_size, st.st_mtime_ns)
     except OSError:
         return (p.name, None, None)
 
@@ -628,15 +633,132 @@ def build_year(year, by_month, daily_by_month, cols, files, src, warnings,
         'stats':     stats,
         'warnings':  warns,
         'cols':      cols,
-        'daily':     [dict(d, m=m) for m in sorted(daily_by_month) for d in daily_by_month[m]],
+        # 並びは機械・日付・項目で決め打ちにする。読んだ順のままだと、
+        # 前回のまま使う年があるかどうかで中身の並びが変わってしまう。
+        'daily':     [dict(d, m=m) for m in sorted(daily_by_month)
+                      for d in sorted(daily_by_month[m],
+                                      key=lambda x: (str(x.get('machine') or ''),
+                                                     str(x.get('date') or ''),
+                                                     str(x.get('label') or '')))],
         'oper':      build_oper(year, daily_by_month, closed),
         'waste':     build_waste(year, by_month),
         'records':   records,
     }
 
 
-def build(src, year=None, outdir=None, closed=None):
-    """フォルダを読み、年ごとの data_YYYY.json と years.json を書き出す"""
+CACHE_NAME = 'cache.json'
+CACHE_VERSION = 4     # 目印の作り方を変えたら上げる
+
+
+def load_cache(outdir):
+    """前回の読み込みの控えを読む
+
+    中身:
+      files … {パス: {"key": [大きさ, 更新日時], "info": 元ファイルの一覧に出す情報}}
+      years … {"2013": {"summary": 年の要約, "files": [パス, ...]}}
+      cols  … 日報の見出し列（出てきた順）
+    """
+    p = Path(outdir) / CACHE_NAME
+    try:
+        c = json.loads(p.read_text(encoding='utf-8'))
+        if c.get('version') == CACHE_VERSION:
+            return c
+    except (OSError, ValueError):
+        pass
+    return {'version': CACHE_VERSION, 'files': {}, 'years': {}, 'cols': []}
+
+
+def save_cache(outdir, cache):
+    cache['version'] = CACHE_VERSION
+    try:
+        (Path(outdir) / CACHE_NAME).write_text(
+            json.dumps(cache, ensure_ascii=False), encoding='utf-8')
+    except OSError as e:                                         # noqa: BLE001
+        print('  控えを書けませんでした（次回も全部読み直します）: %s' % e)
+
+
+def merge_read(a, b):
+    """read_folder の結果を1つにまとめる"""
+    rows, daily, cols, info, warns = a
+    r2, d2, c2, i2, w2 = b
+    for y, months in r2.items():
+        for m, rr in months.items():
+            rows.setdefault(y, OrderedDict()).setdefault(m, []).extend(rr)
+    for y, months in d2.items():
+        for m, dd in months.items():
+            daily.setdefault(y, OrderedDict()).setdefault(m, []).extend(dd)
+    for n in c2:
+        if n not in cols:
+            cols.append(n)
+    return rows, daily, cols, info + i2, warns + w2
+
+
+def read_incremental(targets, cache, outdir, force_year=None):
+    """変わったところだけを読む
+
+    去年より前の日報は内容が決まっているので、ファイルが変わっていなければ
+    読み直さない。書き変わるのは当月の日報だけなので、2回目からは今年のぶん
+    だけを読むことになる。
+
+    新しく増えたファイルは、開いてみるまでどの年のものか分からない。そこで
+      1回目 … 変わった・増えたファイルだけ読んで、関わる年を知る
+      2回目 … その年に関わる残りのファイルを読む（年の全行がそろわないと
+               集計できないため）
+    の2段階にしてある。
+
+    戻り値: (読み取り結果, 作り直す年, そのまま使う年, 消えたファイル, 読んだ数)
+    """
+    now = {str(p): list(file_key(p)) for p, _k in targets}
+    old = cache.get('files') or {}
+    cyears = cache.get('years') or {}
+
+    changed = {p for p, k in now.items()
+               if p not in old or list(old[p].get('key') or []) != k}
+    gone = [p for p in old if p not in now]
+
+    # 変わった・消えたファイルが、控えの上で関わっていた年
+    dirty = set()
+    for p in list(changed) + gone:
+        for y in (old.get(p, {}).get('years') or []):
+            dirty.add(int(y))
+    # 出来上がりが残っていない年
+    for ys in cyears:
+        if not (Path(outdir) / ('data_%s.json' % ys)).exists():
+            dirty.add(int(ys))
+    if force_year:
+        dirty.add(int(force_year))
+
+    # ① 変わった・増えたファイルを読む（増えたぶんの年はここで分かる）
+    done = set()
+    got = read_folder([(p, k) for p, k in targets if str(p) in changed])
+    done |= changed
+    for y in got[0]:
+        dirty.add(int(y))
+
+    # ② 作り直す年に関わる残りのファイルを読む（年の全行がそろわないと集計できない）
+    need = set()
+    for ys, e in cyears.items():
+        if int(ys) in dirty:
+            need.update(e.get('files') or [])
+    need -= done
+    need &= set(now)
+    if need:
+        got = merge_read(got, read_folder([(p, k) for p, k in targets
+                                           if str(p) in need]))
+        done |= need
+
+    keep = sorted(int(y) for y in cyears if int(y) not in dirty)
+    return got, dirty, keep, gone, done
+
+
+def build(src, year=None, outdir=None, closed=None, fresh=False):
+    """フォルダを読み、年ごとの data_YYYY.json と years.json を書き出す
+
+    去年より前の日報は内容が決まっているので、ファイルが変わっていなければ
+    作り直さない（前回の出来上がりをそのまま使う）。書き変わるのは当月の
+    日報だけなので、2回目からは今年のぶんだけを読むことになる。
+    fresh=True で控えを無視して全部作り直す。
+    """
     srcs, cands = resolve_src(src)
     if not srcs:
         msg = 'フォルダが見つかりません:\n    ' + '\n    '.join(cands)
@@ -646,36 +768,64 @@ def build(src, year=None, outdir=None, closed=None):
         raise SystemExit(msg)
 
     outdir = Path(outdir or WEB)
+    outdir.mkdir(parents=True, exist_ok=True)
     targets = collect_files(srcs)
     if not targets:
         raise SystemExit('稼動日報の .xls が1つも見つかりません:\n    '
                          + '\n    '.join(str(x) for x in srcs))
 
-    rows, daily, cols, files, warnings = read_folder(targets)
+    cache = {'version': CACHE_VERSION, 'files': {}, 'years': {}, 'cols': []} \
+        if (fresh or year) else load_cache(outdir)
+    got, dirty, keep, gone, done = read_incremental(targets, cache, outdir, year)
+    if keep:
+        print('  前回のまま使う年: %s（%d件のファイルは読みません）'
+              % ('、'.join('%d年' % y for y in keep), len(targets) - len(done)))
+    rows, daily, cols, read_info, warnings = got
+    for n in (cache.get('cols') or []):          # 読まなかったファイルの列も残す
+        if n not in cols:
+            cols.append(n)
+
     # 見つからなかったフォルダは警告にしない。U: が使えるPCではUNC側が、
     # 使えないPCではU:側が必ず存在しないため、毎回出ると邪魔になる。
     # 「元ファイル」タブでだけ確認できるようにする。
     skipped = [c for c in cands if not Path(c).is_dir()]
-    if not rows:
-        raise SystemExit('月次シート（「26年1月」形式）が1つも見つかりませんでした: %s' % src)
 
+    # 今回読んだぶんで控えを更新する
+    now_keys = {str(p): list(file_key(p)) for p, _k in targets}
+    cfiles = dict(cache.get('files') or {})
+    for p in gone:
+        cfiles.pop(p, None)
+    read_by_path = {f['path']: f for f in read_info}
+    for path in done:
+        f = read_by_path.get(path)
+        cfiles[path] = {'key': now_keys[path],
+                        'years': sorted(int(y) for y in (f['years'] if f else {})),
+                        'info': f}
+    # 読まなかったファイルの情報は控えから引き継ぐ
+    files = [cfiles[p]['info'] for p in sorted(cfiles) if cfiles[p].get('info')]
+
+    read_years = sorted(y for y in rows if y >= MIN_YEAR)
     too_old = sorted(y for y in rows if y < MIN_YEAR)
     if too_old:
         warnings.append('%s は %d年より前のため読み込みませんでした。'
                         % ('、'.join('%d年' % y for y in too_old), MIN_YEAR))
-    years = sorted(y for y in rows if y >= MIN_YEAR)
+    keep = [y for y in keep if y not in rows]   # 行を読んだ年は必ず作り直す
+    years = sorted(set(read_years) | set(keep))
     if not years:
         raise SystemExit('%d年以降のデータが見つかりませんでした。' % MIN_YEAR)
     if year:
-        if year not in years:
+        if year not in read_years:
             raise SystemExit('%d年 のデータがありません。このフォルダにあるのは %s です。'
-                             % (year, '、'.join('%d年' % y for y in years)))
-        years = [year]
+                             % (year, '、'.join('%d年' % y for y in read_years)))
+        years, keep = [year], []
 
-    outdir.mkdir(parents=True, exist_ok=True)
     source = ' ／ '.join(str(x) for x in srcs)
+    cyears = dict(cache.get('years') or {})
     summary = []
     for y in years:
+        if y in keep:                            # 変わっていないので作り直さない
+            summary.append(cyears[str(y)]['summary'])
+            continue
         data = build_year(y, rows[y], daily.get(y, {}), cols, files, source, warnings,
                           closed)
         data['sources'] = [str(x) for x in srcs]
@@ -688,7 +838,7 @@ def build(src, year=None, outdir=None, closed=None):
         for st in data['stats']:
             by_dept.setdefault(st['dept'], {})[str(st['m'])] = [st['tsuGroups'],
                                                                 st['groups']]
-        summary.append({
+        one = {
             'year':    y,
             'months':  data['months'],
             'records': len(data['records']),
@@ -696,10 +846,14 @@ def build(src, year=None, outdir=None, closed=None):
             'tsu':     sum(s['tsuGroups'] for s in data['stats']),
             'depts':   list(data['depts']),
             'byDept':  by_dept,          # {部署: {"月": [通し数, 件数]}}
-        })
+        }
+        summary.append(one)
+        cyears[str(y)] = {'summary': one,
+                          'files': sorted(p for p, e in cfiles.items()
+                                          if y in (e.get('years') or []))}
 
     if not year:
-        # 年を絞らずに作り直したときは、今回作らなかった年のファイルを消す。
+        # 年を絞らずに作り直したときは、今回の対象でない年のファイルを消す。
         # 前回の読み込みで出ていた年が、画面に残り続けないようにするため。
         for p in outdir.glob('data_*.json'):
             try:
@@ -707,6 +861,9 @@ def build(src, year=None, outdir=None, closed=None):
                     p.unlink()
             except (ValueError, IndexError, OSError):
                 pass
+        for ys in [y for y in cyears if int(y) not in years]:
+            cyears.pop(ys, None)
+        save_cache(outdir, {'files': cfiles, 'years': cyears, 'cols': cols})
 
     manifest = {
         'generated': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
@@ -731,6 +888,8 @@ def main():
     p.add_argument('--out', default=str(WEB), help='出力先フォルダ（既定 web）')
     p.add_argument('--closed', action='append',
                    help='会社の休業日（--closed 08-13..15 のように複数指定可）')
+    p.add_argument('--fresh', action='store_true',
+                   help='前回の控えを使わず、全部読み直す')
     a = p.parse_args()
 
     print('対象フォルダ:')
@@ -744,7 +903,7 @@ def main():
                   + ('\n      → %s として読み込みます' % hit if hit is not None
                      else '  （見つかりません）'))
     print('対象年      : %s' % ('%d年' % a.year if a.year else 'フォルダ内の全部'))
-    m = build(a.src, a.year, a.out, a.closed)
+    m = build(a.src, a.year, a.out, a.closed, a.fresh)
 
     print('\n── 集計結果 ' + '─' * 56)
     print('%-8s %8s %8s %14s   %s' % ('年', '明細行', '統合件数', '通し数', '月'))

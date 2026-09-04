@@ -34,6 +34,14 @@ var el = function (tag, cls, html) {
   return e;
 };
 
+/* 読込元フォルダや読み込んだ時刻は、年ごとではなく「今回の読み込み」の情報。
+   変わっていない年は作り直さないので、年のデータ(data_<年>.json)の中の値は
+   古いことがある。全体の years.json を先に見る。 */
+function runInfo(key, fallback) {
+  if (YEARS && YEARS[key] !== undefined && YEARS[key] !== null) { return YEARS[key]; }
+  return DATA && DATA[key] !== undefined && DATA[key] !== null ? DATA[key] : fallback;
+}
+
 /* ── 起動 ──
    years.json（そのフォルダにどの年が入っているか）を読んでから、その年のデータを読む。
    13年〜25年のように複数年あるフォルダでも、画面上部で年を切り替えられる。 */
@@ -203,7 +211,7 @@ function planTsu(r) { var v = parseFloat(String(memoOf(r).tsu).replace(/[^0-9.-]
 /* ── 描画 ── */
 function render() {
   $('#ttl').textContent = DATA.year + '年 稼動日報 印刷実績ビューア';
-  $('#meta').textContent = '読込 ' + DATA.generated + '　／　'
+  $('#meta').textContent = '読込 ' + runInfo('generated', '') + '　／　'
     + DATA.files.length + 'ファイル　／　' + num(DATA.records.length) + '件'
     + (YEARS && YEARS.years.length > 1
        ? '　／　このフォルダの年: ' + YEARS.years.map(function (y) { return y.year; }).join('、')
@@ -1597,8 +1605,8 @@ function renderSrc() {
   });
   h += '</tbody>';
   $('#files').innerHTML = h;
-  var srcs = DATA.sources || [DATA.source];
-  var sk = DATA.skipped || [];
+  var srcs = runInfo('sources', null) || [runInfo('source', '')];
+  var sk = runInfo('skipped', null) || [];
   $('#srcPath').innerHTML = '<b>読込元フォルダ</b><br>　' + srcs.map(esc).join('<br>　')
     + (sk.length ? '<br><b>このPCに無かったフォルダ（読み飛ばし）</b><br>　'
         + sk.map(esc).join('<br>　') : '')
@@ -1881,7 +1889,7 @@ function setPrintTitle() {
   var t = $('#printTitle');
   if (!t || !DATA) { return; }
   t.innerHTML = esc(DATA.year + '年 稼動日報 印刷実績　' + (VIEWNAME[S.view] || ''))
-    + '<small>' + esc('読込 ' + DATA.generated) + '</small>';
+    + '<small>' + esc('読込 ' + runInfo('generated', '')) + '</small>';
 }
 
 /* 記入欄の中身を、印刷用の文字に写す
