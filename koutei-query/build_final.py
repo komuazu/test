@@ -224,6 +224,8 @@ def main():
     ap.add_argument("--out", default="平版印刷_オンデマンド移行検討_3000通し以下_資料.xlsx")
     ap.add_argument("--max-pass", type=int, default=3000)
     ap.add_argument("--csv", help="同じ内容の CSV も出す")
+    ap.add_argument("--a3-only", action="store_true",
+                    help="月シートは A3 以下（○）の行だけにし、× は外す。帳票なし・不明は「未判定」シートにまとめる")
     args = ap.parse_args()
 
     base = read_base(args.base)
@@ -239,8 +241,18 @@ def main():
     print(f"帳票: {len(all_docs)} 通・受注 {len(docs)} 件 → 母集団と一致 {hit} / {len(small)} 行")
 
     by_month = collections.defaultdict(list)
+    pending = []
     for x in small:
         m = x["印刷日"][:7].replace("/", "-") or "月不明"
+        if args.a3_only:
+            d = docs.get(x["key"])
+            verdict = d["A3以下"] if d else "帳票なし"
+            if verdict == "×":
+                continue
+            if verdict != "○":
+                x = dict(x, 月=m)
+                pending.append(x)
+                continue
         by_month[m].append(x)
     months = sorted(by_month)
     for m in months:
@@ -254,7 +266,12 @@ def main():
     for m in months:
         ranges[m] = write_month(wb, m, by_month[m], docs, note)
         print(f"  {m}: {len(by_month[m])} 行、帳票あり {sum(1 for x in by_month[m] if x['key'] in docs)}")
-    write_summary(wb, months, ranges, stats, os.path.basename(args.base))
+    if args.a3_only and pending:
+        pending.sort(key=lambda x: (x["月"], x["印刷日"], x["営業部"], x["管理番号"]))
+        ranges["未判定"] = write_month(wb, "未判定", pending, docs,
+                                     "仕上りサイズが分からない行（帳票なし、または規格外で実寸なし）。A3 以下かどうかは元の帳票か基幹システムで確かめる")
+        print(f"  未判定: {len(pending)} 行")
+    write_summary(wb, months + (["未判定"] if args.a3_only and pending else []), ranges, stats, os.path.basename(args.base))
     wb.save(args.out)
     print(f"出力: {args.out}")
 
