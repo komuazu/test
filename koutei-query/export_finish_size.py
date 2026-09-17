@@ -432,7 +432,7 @@ def size_mm(text):
 
 def judge_a3(size_text):
     """1つの仕上りサイズ表記を '○'（A3以下）/ '×'（A3より大きい）/ '?'（分からない）にする。"""
-    t0 = unicodedata.normalize("NFKC", size_text).lower().strip()
+    t0 = unicodedata.normalize("NFKC", size_text).replace("\\", "").lower().strip()
     t = re.sub(r"\s+", "", t0)
     if not t:
         return "?"

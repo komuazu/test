@@ -87,7 +87,7 @@ def load_docs(textdir):
             j = json.load(open(p, encoding="utf-8"))
         except (ValueError, OSError):
             continue
-        if not j.get("text"):
+        if not isinstance(j, dict) or not j.get("text"):
             continue
         d = parse_any(j["text"], j.get("title", ""))
         if not d:

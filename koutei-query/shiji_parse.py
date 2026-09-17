@@ -231,7 +231,7 @@ def parse_insatsu(text, title=""):
         d["製品名"], d["得意先"] = m.group(1).strip(), m.group(2).strip()
     m = re.search(r"仕上サイズ (.+?) 受注数量 ([\d,]+)", t)
     if m:
-        d["仕上りサイズ"], d["受注数量"] = m.group(1).strip(), to_int(m.group(2))
+        d["仕上りサイズ"], d["受注数量"] = m.group(1).replace("\\*", "×").replace("*", "×").strip(), to_int(m.group(2))
     m = re.search(r"表色数 (\d+) 裏色数 (\d+)", t)
     if m:
         d["色数"] = f"{m.group(1)}+{m.group(2)}"
