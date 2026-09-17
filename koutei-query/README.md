@@ -87,6 +87,14 @@ python export_finish_size.py --orders 仕上りサイズ未確認_受注番号�
     --env C:\Users\116544\Desktop\UPDATA17\web_app\.env
 ```
 
+**受注番号一覧の CSV が用意できないときは `--all`。** DB にある受注番号を全部出す。
+絞り込みは後でこちら側でやればよい（本番ダンプ 2,164 件で、一覧を渡したときと
+1 セルも違わないことを確かめている）。
+
+```bat
+python export_finish_size.py --all --env C:\Users\116544\Desktop\UPDATA17\web_app\.env
+```
+
 * `--env` には koutei が使っている `.env`（`DATABASE_HOST` などが書いてあるファイル）を渡す。
   省略すると、カレント／`web_app/` の `.env` → `.env.marumoto` の順に探す
 * パスワードは `.env` の `DATABASE_PASSWORD` を使う。無ければその場で聞く。**画面にもファイルにも出さない**

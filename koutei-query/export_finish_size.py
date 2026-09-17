@@ -330,6 +330,32 @@ def absorb_row_json(rec, d):
             absorb_event_dict(rec, e)
 
 
+def all_order_keys(cur):
+    """DB にある受注番号を全部拾う（受注番号一覧の CSV が用意できないとき用）。
+
+    読むのは受注番号の列だけ。正規化は SQL_NORM（一覧 CSV のときと同じ規則）で行う。
+    """
+    keys = OrderedDict()
+    for table in ("timeline_processes", "waiting_list", "outsourcing_list", "delivery_schedule", "processing_works"):
+        cols = existing_columns(cur, table)
+        if not cols:
+            print(f"  {table}: テーブルが無いので飛ばします")
+            continue
+        ocol = '"orderNumber"' if "orderNumber" in cols else ("order_number" if "order_number" in cols else None)
+        if ocol is None:
+            print(f"  {table}: 受注番号の列が無いので飛ばします")
+            continue
+        cur.execute(
+            f"SELECT DISTINCT {SQL_NORM.format(col=ocol)} AS k FROM {table} "
+            f"WHERE {SQL_NORM.format(col=ocol)} <> '' ORDER BY k"
+        )
+        got = [r[0] for r in cur.fetchall()]
+        for k in got:
+            keys.setdefault(k, k)
+        print(f"  {table}: 受注番号 {len(got)} 件")
+    return keys
+
+
 def rows_from_event_table(cur, table, keys):
     """timeline_processes / waiting_list: 明細は data 列の JSON に入っている。
     MIS の CSV から取り込んだ項目（仕上加工名など）は data.events[] の中にしか無いことがある。"""
@@ -515,7 +541,9 @@ MAIN_HEADER = ["受注番号", "仕上りサイズ", "A3以下", "加工内容",
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--orders", required=True, help="受注番号一覧 CSV（1列目 or 「受注番号」列）")
+    ap.add_argument("--orders", help="受注番号一覧 CSV（1列目 or 「受注番号」列）")
+    ap.add_argument("--all", dest="all_orders", action="store_true",
+                    help="一覧 CSV を使わず、DB にある受注番号を全部出す（絞り込みは後でする）")
     ap.add_argument("--out", default="仕上りサイズ_koutei取得結果.csv", help="出力 CSV")
     ap.add_argument("--a3-only", action="store_true", help="本体 CSV も A3 以下（判定○）の受注番号だけにする")
     ap.add_argument("--env", help="koutei の .env（DATABASE_HOST などを書いたファイル）")
@@ -525,9 +553,15 @@ def main():
     ap.add_argument("--database_user", dest="database_user")
     args = ap.parse_args()
 
-    orders = read_order_numbers(args.orders)
-    keys = list(orders.keys())
-    print(f"受注番号一覧: {len(keys)} 件（{args.orders}）")
+    if not args.orders and not args.all_orders:
+        ap.error("--orders <受注番号一覧CSV> か --all のどちらかを指定してください")
+    if args.orders and args.all_orders:
+        ap.error("--orders と --all は同時に指定できません")
+
+    orders = None
+    if args.orders:
+        orders = read_order_numbers(args.orders)
+        print(f"受注番号一覧: {len(orders)} 件（{args.orders}）")
 
     conn = connect(args)
     cur = conn.cursor()
@@ -537,6 +571,14 @@ def main():
     cur.execute("SELECT current_database(), inet_server_addr(), inet_server_port(), now()")
     dbinfo = cur.fetchone()
     print(f"接続確認: db={dbinfo[0]} addr={dbinfo[1]} port={dbinfo[2]} now={dbinfo[3]}")
+
+    if orders is None:
+        print("DB にある受注番号を数えています:")
+        orders = all_order_keys(cur)
+        print(f"受注番号: {len(orders)} 件（DB 全部）")
+        if not orders:
+            sys.exit("受注番号が 1 件も見つかりませんでした。")
+    keys = list(orders.keys())
 
     print("読み出し中:")
     records = []
