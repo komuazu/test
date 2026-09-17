@@ -289,12 +289,12 @@ CONFLICT_COLS = [("No", 5), ("月", 9), ("営業部", 13), ("管理番号", 10),
                  ("採用", 7), ("帳票\nリンク", 7)]
 
 
-def write_conflicts(wb, rows, taken):
+def write_conflicts(wb, rows):
     """帳票と DB で A3 以下の判定が割れた行を、両方の値を並べて出す。"""
     ws = wb.create_sheet("要確認")
     ws["A1"] = "帳票と koutei の DB で「A3 以下」の判定が割れた行"
     ws["A1"].font = FONT_TITLE
-    ws["A2"] = (f"月シートには {taken} の値を載せている。もう一方の値もこの表に残してあるので、"
+    ws["A2"] = ("「採用」列が、月シートに載せたほうを指す。もう一方の値もこの表に残してあるので、"
                 "気になる行は帳票リンクで元を確かめる。"
                 "帳票側は用紙の大きさを仕上りサイズ欄に拾ってしまうことがあり、DB 側は部品を多く並べる"
                 "（付属のポスターなど別部品や、MIS 一括取込の既定値「B1」が混ざる）。")
@@ -305,7 +305,7 @@ def write_conflicts(wb, rows, taken):
         ws.column_dimensions[get_column_letter(i)].width = w
     style_header(ws, hrow, 7, len(CONFLICT_COLS))
     r = hrow
-    for n, (x, d, b, url) in enumerate(rows, 1):
+    for n, (x, d, b, url, taken) in enumerate(rows, 1):
         r += 1
         vals = [n, x.get("月", ""), x["営業部"], x["管理番号"], x["ｸﾗｲｱﾝﾄ名"], x["品名"], x["通し数"],
                 d["仕上りサイズ"], d["A3以下"], b["仕上りサイズ"], b["A3以下"], taken, "開く" if url else ""]
@@ -407,6 +407,9 @@ def write_summary(wb, months, ranges, stats, base_name):
     if stats.get("dropped"):
         notes += [f"・品名に {stats['drop_words']} を含む {stats['dropped']} 行（通し数 {stats['drop_pass']:,}）は外してある。"
                   "本刷りではないため"]
+    if stats.get("blank_inout"):
+        notes += [f"・内外作が空だった行には「{stats['blank_inout']}」を入れてある"
+                  "（外注一覧に記録が無い＝内作、という扱い）。委託先が入っている行はそのまま"]
     if stats.get("blank_process"):
         notes += [f"・加工内容が空だった行には「{stats['blank_process']}」を入れてある（加工が無い＝化粧断裁だけ、という扱い）。"
                   "帳票にも DB にも行が無い空欄の行には入れていない"]
@@ -414,8 +417,8 @@ def write_summary(wb, months, ranges, stats, base_name):
         notes += [f"・帳票のある {stats['filled']} 行は、帳票で空だった欄だけ koutei の DB の値で補ってある"
                   "（「元の帳票」列が 製造指示書・koutei(DB) のように並ぶ。帳票にある値は上書きしていない）"]
     if stats.get("conflicts"):
-        notes += [f"・「要確認」シートに {stats['conflicts']} 行。帳票と koutei の DB で A3 以下の判定が割れた行で、"
-                  f"月シートには {stats.get('taken', '帳票')} の値を載せている",
+        notes += [f"・「要確認」シートに {stats['conflicts']} 行。帳票と koutei の DB で A3 以下の判定が割れた行。"
+                  "月シートにどちらを載せたかは、そのシートの「採用」列に出ている",
                   "　帳票側は用紙の大きさを仕上りサイズ欄に拾うことがあり、DB 側は別部品や MIS 一括取込の既定値「B1」を"
                   "並べることがある。どちらも取りこぼすので元を見て決める"]
     if stats.get("a3_only"):
@@ -446,11 +449,17 @@ def main():
     ap.add_argument("--conflict-size", choices=["帳票", "DB"], default="帳票",
                     help="帳票と DB で A3 の判定が割れたとき、どちらの仕上りサイズを載せるか（既定: 帳票）。"
                          "どちらを選んでも「要確認」シートに両方の値を並べる")
+    ap.add_argument("--conflict-keep-doc", action="append", default=[], metavar="語",
+                    help="加工内容にこの語を含む行は、--conflict-size DB でも帳票の仕上りサイズを使う。"
+                         "中綴じ・無線綴じは DB に折る前の見開き寸法が混ざるため。何度でも指定できる")
     ap.add_argument("--exclude-name", action="append", default=[], metavar="語",
                     help="品名にこの語を含む行を外す（何度でも指定できる）。例: --exclude-name 本機校正")
     ap.add_argument("--blank-process", metavar="語",
                     help="加工内容が空の行にこの語を入れる（加工が無い＝化粧断裁だけ、という意味のとき）。"
                          "出どころが 1 つも無い行には入れない")
+    ap.add_argument("--blank-inout", metavar="語",
+                    help="内外作が空の行にこの語を入れる（外注一覧に記録が無い＝内作、という意味のとき）。"
+                         "委託先が入っている行と、出どころが 1 つも無い行には入れない")
     ap.add_argument("--a3-only", action="store_true",
                     help="月シートは A3 以下（○）の行だけにし、× は外す。帳票なし・不明は「未判定」シートにまとめる")
     args = ap.parse_args()
@@ -475,7 +484,7 @@ def main():
     n_db = n_guess = 0
     db_rows = {}
     conflicts_all = {}
-    n_fill = 0
+    n_fill = n_keep = 0
     if args.koutei_csv:          # 帳票が無い管理番号を DB で埋め、帳票にある管理番号は空欄だけ補う
         db_rows = read_koutei_csv(args.koutei_csv)
         for k, v in db_rows.items():
@@ -505,13 +514,34 @@ def main():
             if "不明" in (d["A3以下"], v["A3以下"]) or d["A3以下"] == v["A3以下"]:
                 continue
             was = {"仕上りサイズ": d["仕上りサイズ"], "A3以下": d["A3以下"]}
-            if args.conflict_size == "DB":
+            proc = f"{d.get('加工内容') or ''} {v.get('加工内容') or ''}"
+            keep_doc = any(w in proc for w in args.conflict_keep_doc)
+            taken = "帳票" if (args.conflict_size == "帳票" or keep_doc) else "DB"
+            if taken == "DB":
                 d["仕上りサイズ"], d["A3以下"] = v["仕上りサイズ"], v["A3以下"]
                 if SRC_DB not in d["帳票"]:
                     d["帳票"] = list(d["帳票"]) + [SRC_DB]
-            conflicts_all[k] = (was, {"仕上りサイズ": v["仕上りサイズ"], "A3以下": v["A3以下"]})
+            else:
+                n_keep += keep_doc
+            conflicts_all[k] = (was, {"仕上りサイズ": v["仕上りサイズ"], "A3以下": v["A3以下"]}, taken)
         if conflicts_all:
-            print(f"帳票と DB で A3 の判定が割れた受注番号: {len(conflicts_all)} 件（採用: {args.conflict_size}）")
+            msg = f"帳票と DB で A3 の判定が割れた受注番号: {len(conflicts_all)} 件（採用: {args.conflict_size}）"
+            if n_keep:
+                msg += f"。うち {n_keep} 件は「{'・'.join(args.conflict_keep_doc)}」なので帳票を採った"
+            print(msg)
+    if args.blank_inout:         # 外注一覧に記録が無い＝内作。委託先が入っている行はそのまま
+        n_bi = n_skip = 0
+        for d in docs.values():
+            if str(d.get("内外作") or "").strip():
+                continue
+            if str(d.get("加工所") or "").strip():   # 委託先があるのに区分が無い行は決めつけない
+                n_skip += 1
+                continue
+            d["内外作"] = args.blank_inout
+            n_bi += 1
+        msg = f"内外作が空の {n_bi} 件に「{args.blank_inout}」を入れた"
+        print(msg + (f"（委託先が入っている {n_skip} 件はそのまま）" if n_skip else ""))
+
     if args.blank_process:       # 加工が無い＝化粧断裁だけ、という扱い。出どころのある行にだけ入れる
         n_bp = 0
         for d in docs.values():
@@ -529,7 +559,7 @@ def main():
     stats = {"rows": len(small), "keys": len({x["key"] for x in small}), "a3_only": args.a3_only,
              "dropped": len(dropped), "drop_words": "・".join(args.exclude_name),
              "drop_pass": sum(x["通し数"] or 0 for x in dropped),
-             "blank_process": args.blank_process, "filled": 0,
+             "blank_process": args.blank_process, "blank_inout": args.blank_inout, "filled": 0,
              "seizo": sum(d["doc"] == "製造指示書" for d in all_docs), "insatsu": sum(d["doc"] == "印刷指示書" for d in all_docs),
              "itaku": sum(d["doc"] == "外注委託依頼書" for d in all_docs)}
     stats["filled"] = n_fill
@@ -579,14 +609,13 @@ def main():
             if k not in conflicts_all or k in seen:
                 continue
             seen.add(k)
-            was, now = conflicts_all[k]
+            was, now, taken = conflicts_all[k]
             conflicts.append((dict(x, 月=x.get("月") or x["印刷日"][:7].replace("/", "-")),
-                              was, now, (docs.get(k) or {}).get("url", "")))
+                              was, now, (docs.get(k) or {}).get("url", ""), taken))
     if conflicts:
         conflicts.sort(key=lambda t: (t[0]["月"], t[0]["管理番号"]))
-        n_conf = write_conflicts(wb, conflicts, args.conflict_size)
+        n_conf = write_conflicts(wb, conflicts)
         stats["conflicts"] = n_conf
-        stats["taken"] = args.conflict_size
         print(f"  要確認: {n_conf} 行（帳票と DB で A3 の判定が割れた。採用: {args.conflict_size}）")
     write_summary(wb, [name for name, _ in sheets], ranges, stats, os.path.basename(args.base))
     wb.save(args.out)
