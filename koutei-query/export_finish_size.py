@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 koutei-kanr30（社内工程管理システム）の本番DBから、受注番号ごとの
-「仕上りサイズ・加工内容・内外作区分・委託先名」を読み出して CSV にする。
+「仕上りサイズ・加工内容・内外作区分・委託先名・用紙」を読み出して CSV にする。
 
 * 読み取り専用。DB もコードも一切書き換えない
   （接続を default_transaction_read_only=on にして開くので、書き込み文は DB 側で拒否される）
@@ -33,7 +33,6 @@ from collections import OrderedDict
 
 try:
     import psycopg2
-    import psycopg2.extras
 except ImportError:  # pragma: no cover
     sys.exit("psycopg2 が入っていません。 pip install psycopg2-binary で入れてください。")
 
@@ -41,20 +40,42 @@ except ImportError:  # pragma: no cover
 # ------------------------------------------------------------
 # 受注番号のゆれ吸収
 # ------------------------------------------------------------
+FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
 def norm_order(value):
-    """'08726258' / '8726258' / '8726258.0' / '８７２６２５８' を同じキーにする。"""
+    """'08726258' / '8726258' / '8726258.0' / '８７２６２５８' / '08726258（表紙）' / '08726258②' を
+    同じキー '8726258' にし、枝（（表紙）・②・複製1 など）を別に返す。
+    NFKC はかけない（② が 2 になって別の受注番号に化けるため）。数字の部分だけ半角にする。"""
     if value is None:
-        return ""
-    s = unicodedata.normalize("NFKC", str(value)).strip()
-    s = re.sub(r"\s+", "", s)
-    if re.fullmatch(r"\d+\.0+", s):  # Excel 由来の 8726258.0
-        s = s.split(".")[0]
-    s = s.lstrip("0")
-    return s
+        return "", ""
+    s = re.sub(r"\s+", "", str(value))
+    m = re.match(r"^([0-9０-９]+)(.*)$", s)
+    if not m:
+        return "", s
+    digits = m.group(1).translate(FULLWIDTH_DIGITS).lstrip("0")
+    rest = m.group(2)
+    if re.fullmatch(r"\.0+", rest):  # Excel 由来の 8726258.0
+        rest = ""
+    if not digits:  # ゼロだけ（0, 000）は受注番号ではない
+        return "", s
+    return digits, rest
 
 
-# SQL 側で同じ正規化をする式（"orderNumber" 列 / order_number 列に当てる）
-SQL_NORM = "regexp_replace(regexp_replace(COALESCE({col}, ''), '\\s', '', 'g'), '^0+', '')"
+# SQL 側で同じ規則（空白を落とし、先頭の数字だけ取り、前ゼロを落とす）
+SQL_NORM = (
+    "regexp_replace(COALESCE(substring(regexp_replace(translate(COALESCE({col}, ''), '０１２３４５６７８９', '0123456789'), "
+    "'\\s', '', 'g') from '^\\d+'), ''), '^0+', '')"
+)
+
+# 「値なし」とみなす文字列
+EMPTY_WORDS = {"", "-", "－", "―", "未設定", "未定", "なし", "無し", "none", "null", "nan"}
+# 委託先名として意味のないもの
+NOT_A_COMPANY = EMPTY_WORDS | {"未手配", "内作"}
+# processing_works.classification のうち加工内容としては意味のないもの
+GENERIC_CLASSIFICATION = {"その他", "内作", "外注"}
+# work_department のうち内作（自社の加工）と判定するもの（画面の選択肢: -/第二工場/POP課/本社/営業/その他）
+INTERNAL_DEPARTMENTS = {"第二工場", "本社", "POP課"}
 
 
 def truthy(v):
@@ -64,18 +85,19 @@ def truthy(v):
         return v
     if isinstance(v, (int, float)):
         return v != 0
-    return str(v).strip().lower() in ("1", "true", "yes", "on", "内作", "外注")
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
-def clean(v):
-    if v is None:
+def clean(v, empty=EMPTY_WORDS):
+    """文字列だけを返す。dict/list や「-」「未設定」などは空扱い。"""
+    if v is None or isinstance(v, (dict, list, bool)):
         return ""
     s = str(v).strip()
-    return "" if s.lower() in ("none", "null", "nan", "未設定", "-", "未定") else s
+    return "" if s.lower() in empty else s
 
 
-def add_unique(lst, value):
-    value = clean(value)
+def add_unique(lst, value, empty=EMPTY_WORDS):
+    value = clean(value, empty)
     if value and value not in lst:
         lst.append(value)
 
@@ -115,16 +137,23 @@ def read_order_numbers(path):
             start = 1
             break
     else:
-        if not re.fullmatch(r"\d+(\.0+)?", norm_order(header[0]) or "x"):
-            start = 1  # 数字でない1行目は見出しとみなす
+        if not norm_order(header[0])[0]:
+            start = 1  # 数字で始まらない1行目は見出しとみなす
 
     result = OrderedDict()  # 正規化キー → 元の表記（最初に出たもの）
+    dropped = []
     for r in rows[start:]:
         if col >= len(r):
             continue
-        key = norm_order(r[col])
-        if key and key not in result:
+        key, _ = norm_order(r[col])
+        if not key:
+            if r[col].strip():
+                dropped.append(r[col].strip())
+            continue
+        if key not in result:
             result[key] = r[col].strip()
+    if dropped:
+        print(f"※ 受注番号として読めなかった値 {len(dropped)} 件を飛ばしました: {dropped[:10]}")
     return result
 
 
@@ -164,7 +193,10 @@ def find_env_file(explicit):
 
 def connect(args):
     env = load_env_file(find_env_file(args.env))
-    get = lambda k, d=None: args.__dict__.get(k.lower()) or os.environ.get(k) or env.get(k) or d
+
+    def get(k, d=None):
+        return args.__dict__.get(k.lower()) or os.environ.get(k) or env.get(k) or d
+
     host = get("DATABASE_HOST", "localhost")
     port = int(get("DATABASE_PORT", 5432))
     dbname = get("DATABASE_NAME", "koutei_kanri_dev")
@@ -217,8 +249,69 @@ def parse_json(v):
         return {}
 
 
+def new_record(table, row_id, order_raw, updated_at="", created_at=""):
+    key, suffix = norm_order(order_raw)
+    return {
+        "table": table,
+        "row_id": row_id,
+        "order_raw": order_raw,
+        "key": key,
+        "suffix": suffix,           # 受注番号に付いていた枝（（表紙）・②・複製1 など）
+        "part": "",
+        "sizes": [],
+        "papers": [],               # (銘柄, 規格, 斤量)
+        "contents": [],
+        "internal": False,
+        "outsourcing": False,
+        "work_department": "",
+        "companies": [],
+        "company_contents": [],     # (委託先, 加工内容)
+        "flags": [],
+        "updated_at": updated_at or "",
+        "created_at": created_at or "",
+    }
+
+
+def absorb_event_dict(rec, d):
+    """イベントの JSON（最上位でも events[] の要素でも同じ形）から項目を拾う。"""
+    if not rec["part"]:
+        rec["part"] = clean(d.get("part_type") or d.get("part_name") or d.get("partName"))
+    add_unique(rec["sizes"], d.get("finish_size") or d.get("finished_size") or d.get("finishSize"))
+    for k in ("finish_processing_name", "finish_processing", "finishProcessing", "processing_content", "finish_process"):
+        add_unique(rec["contents"], d.get(k))
+    rec["internal"] = rec["internal"] or truthy(d.get("internal_work"))
+    rec["outsourcing"] = rec["outsourcing"] or truthy(d.get("outsourcing"))
+    dept = clean(d.get("work_department"))
+    if dept and not rec["work_department"]:
+        rec["work_department"] = dept
+    for k in ("outsourcing_company", "outsource_name"):
+        add_unique(rec["companies"], d.get(k), NOT_A_COMPANY)
+    items = d.get("outsourcing_items")
+    if isinstance(items, list):
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            comp = clean(it.get("company") or it.get("company_name") or it.get("name"), NOT_A_COMPANY)
+            cont = clean(it.get("processing_content") or it.get("content"))
+            add_unique(rec["companies"], comp, NOT_A_COMPANY)
+            add_unique(rec["contents"], cont)
+            if (comp or cont) and (comp, cont) not in rec["company_contents"]:
+                rec["company_contents"].append((comp, cont))
+    add_paper(rec, d.get("paper_type") or d.get("paperType"), d.get("standard_size"), d.get("paper_weight") or d.get("paperWeight"))
+    for lst_key in ("order_paper_info", "papers"):  # 部品ごとの用紙（外注委託依頼書で使う形）
+        lst = d.get(lst_key)
+        if isinstance(lst, list):
+            for pi in lst:
+                if isinstance(pi, dict):
+                    add_paper(rec, pi.get("paper_type"), pi.get("standard_size"), pi.get("paper_weight"))
+    for k in ("isReturnProcess", "isContinueProcess", "is_return", "is_continue"):
+        if truthy(d.get(k)) and k not in rec["flags"]:
+            rec["flags"].append(k)
+
+
 def rows_from_event_table(cur, table, keys):
-    """timeline_processes / waiting_list: 明細は data 列の JSON に入っている。"""
+    """timeline_processes / waiting_list: 明細は data 列の JSON に入っている。
+    MIS の CSV から取り込んだ項目（仕上加工名など）は data.events[] の中にしか無いことがある。"""
     cols = existing_columns(cur, table)
     if not cols or "data" not in cols:
         print(f"  {table}: テーブルまたは data 列が無いので飛ばします")
@@ -227,60 +320,24 @@ def rows_from_event_table(cur, table, keys):
     if ocol is None:
         print(f"  {table}: 受注番号の列が無いので飛ばします")
         return []
-    extra = [c for c in ("date", "machine", "name", "updated_at") if c in cols]
+    extra = [c for c in ("updated_at", "created_at") if c in cols]
     sel = ", ".join(["id", ocol, "data"] + extra)
     cur.execute(
-        f"SELECT {sel} FROM {table} WHERE {SQL_NORM.format(col=ocol)} = ANY(%s)",
+        f"SELECT {sel} FROM {table} WHERE {SQL_NORM.format(col=ocol)} = ANY(%s) ORDER BY id",
         (keys,),
     )
     out = []
     for row in cur.fetchall():
-        rid, onum, data = row[0], row[1], row[2]
-        d = parse_json(data)
-        rec = {
-            "table": table,
-            "row_id": rid,
-            "order_raw": onum,
-            "key": norm_order(onum),
-            "part": clean(d.get("part_type") or d.get("part_name") or d.get("partName")),
-            "finish_size": clean(d.get("finish_size") or d.get("finished_size") or d.get("finishSize")),
-            "papers": [],  # (銘柄, 規格, 斤量)
-            "contents": [],
-            "internal": truthy(d.get("internal_work")),
-            "outsourcing": truthy(d.get("outsourcing")),
-            "work_department": clean(d.get("work_department")),
-            "companies": [],
-            "company_contents": [],  # (委託先, 加工内容)
-            "flags": [],
-            "updated_at": row[3 + extra.index("updated_at")] if "updated_at" in extra else "",
-        }
-        for k in ("finish_processing_name", "finish_processing", "finishProcessing", "processing_content", "finish_process"):
-            add_unique(rec["contents"], d.get(k))
-        add_paper(rec, d.get("paper_type") or d.get("paperType"), d.get("standard_size"), d.get("paper_weight") or d.get("paperWeight"))
-        for lst_key in ("order_paper_info", "papers"):  # 部品ごとの用紙（外注委託依頼書で使う形）
-            lst = d.get(lst_key)
-            if isinstance(lst, list):
-                for pi in lst:
-                    if isinstance(pi, dict):
-                        add_paper(rec, pi.get("paper_type"), pi.get("standard_size"), pi.get("paper_weight"))
-        for k in ("outsourcing_company", "outsource_name"):
-            add_unique(rec["companies"], d.get(k))
-        items = d.get("outsourcing_items")
-        if isinstance(items, list):
-            for it in items:
-                if not isinstance(it, dict):
-                    continue
-                comp = clean(it.get("company") or it.get("company_name") or it.get("name"))
-                cont = clean(it.get("processing_content") or it.get("content"))
-                add_unique(rec["companies"], comp)
-                add_unique(rec["contents"], cont)
-                if comp or cont:
-                    pair = (comp, cont)
-                    if pair not in rec["company_contents"]:
-                        rec["company_contents"].append(pair)
-        for k in ("isReturnProcess", "isContinueProcess", "is_return", "is_continue"):
-            if truthy(d.get(k)):
-                rec["flags"].append(k)
+        d = parse_json(row[2])
+        rec = new_record(table, row[0], row[1],
+                         row[3 + extra.index("updated_at")] if "updated_at" in extra else "",
+                         row[3 + extra.index("created_at")] if "created_at" in extra else "")
+        absorb_event_dict(rec, d)
+        events = d.get("events")
+        if isinstance(events, list):
+            for e in events:
+                if isinstance(e, dict):
+                    absorb_event_dict(rec, e)
         out.append(rec)
     print(f"  {table}: {len(out)} 行")
     return out
@@ -299,45 +356,29 @@ def rows_from_flat_table(cur, table, keys, colmap):
     wanted = [c for c in colmap if c in cols]
     sel = ", ".join(["id", ocol] + wanted)
     cur.execute(
-        f"SELECT {sel} FROM {table} WHERE {SQL_NORM.format(col=ocol)} = ANY(%s)",
+        f"SELECT {sel} FROM {table} WHERE {SQL_NORM.format(col=ocol)} = ANY(%s) ORDER BY id",
         (keys,),
     )
     out = []
     for row in cur.fetchall():
         d = dict(zip(wanted, row[2:]))
-        rec = {
-            "table": table,
-            "row_id": row[0],
-            "order_raw": row[1],
-            "key": norm_order(row[1]),
-            "part": clean(d.get("part_name")),
-            "finish_size": clean(d.get("finish_size")),
-            "papers": [],
-            "contents": [],
-            "internal": False,
-            "outsourcing": truthy(d.get("outsourcing")),
-            "work_department": clean(d.get("work_department")),
-            "companies": [],
-            "company_contents": [],
-            "flags": [],
-            "updated_at": d.get("updated_at") or "",
-        }
+        rec = new_record(table, row[0], row[1], d.get("updated_at"), d.get("created_at"))
+        rec["part"] = clean(d.get("part_name"))
+        add_unique(rec["sizes"], d.get("finish_size"))
+        rec["work_department"] = clean(d.get("work_department"))
+        rec["outsourcing"] = truthy(d.get("outsourcing"))
         add_unique(rec["contents"], d.get("processing_content"))
-        add_unique(rec["companies"], d.get("outsourcing_company"))
+        comp = clean(d.get("outsourcing_company"), NOT_A_COMPANY)
+        add_unique(rec["companies"], comp, NOT_A_COMPANY)
         add_paper(rec, d.get("paper_type"), d.get("standard_size"), d.get("paper_weight"))
         if table == "processing_works":
             # 内作加工の作業一覧。classification は 折加工1／折加工2／中綴じ加工 などの機械区分
             rec["internal"] = True
-            add_unique(rec["contents"], d.get("classification"))
+            add_unique(rec["contents"], d.get("classification"), EMPTY_WORDS | GENERIC_CLASSIFICATION)
         if table == "outsourcing_list":
             rec["outsourcing"] = True
-            comp = clean(d.get("outsourcing_company"))
-            cont = clean(d.get("processing_content"))
-            if comp or cont:
-                rec["company_contents"].append((comp, cont))
-        elif rec["companies"]:
-            comp = rec["companies"][0]
-            cont = clean(d.get("processing_content"))
+        cont = clean(d.get("processing_content"))
+        if comp and (comp, cont) not in rec["company_contents"]:
             rec["company_contents"].append((comp, cont))
         out.append(rec)
     print(f"  {table}: {len(out)} 行")
@@ -355,7 +396,8 @@ def summarize(records):
             {"sizes": [], "contents": [], "companies": [], "internal": False, "outsourcing": False, "depts": [],
              "paper_types": [], "paper_sizes": [], "paper_weights": []},
         )
-        add_unique(s["sizes"], r["finish_size"])
+        for v in r["sizes"]:
+            add_unique(s["sizes"], v)
         for pt, ps, pw in r["papers"]:
             add_unique(s["paper_types"], pt)
             add_unique(s["paper_sizes"], ps)
@@ -363,9 +405,9 @@ def summarize(records):
         for c in r["contents"]:
             add_unique(s["contents"], c)
         for c in r["companies"]:
-            add_unique(s["companies"], c)
+            add_unique(s["companies"], c, NOT_A_COMPANY)
         add_unique(s["depts"], r["work_department"])
-        s["internal"] = s["internal"] or r["internal"] or bool(r["work_department"])
+        s["internal"] = s["internal"] or r["internal"] or (r["work_department"] in INTERNAL_DEPARTMENTS)
         s["outsourcing"] = s["outsourcing"] or r["outsourcing"] or bool(r["companies"])
     return by_key
 
@@ -385,6 +427,9 @@ def write_csv(path, header, rows):
         w = csv.writer(f, lineterminator="\r\n")
         w.writerow(header)
         w.writerows(rows)
+
+
+MAIN_HEADER = ["受注番号", "仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"]
 
 
 def main():
@@ -417,16 +462,16 @@ def main():
     records += rows_from_event_table(cur, "waiting_list", keys)
     records += rows_from_flat_table(
         cur, "outsourcing_list", keys,
-        ["finish_size", "outsourcing_company", "processing_content", "part_name", "updated_at"],
+        ["finish_size", "outsourcing_company", "processing_content", "part_name", "updated_at", "created_at"],
     )
     records += rows_from_flat_table(
         cur, "delivery_schedule", keys,
         ["finish_size", "work_department", "outsourcing", "outsourcing_company", "processing_content",
-         "part_name", "paper_type", "standard_size", "paper_weight", "updated_at"],
+         "part_name", "paper_type", "standard_size", "paper_weight", "updated_at", "created_at"],
     )
     records += rows_from_flat_table(
         cur, "processing_works", keys,
-        ["classification", "processing_content", "updated_at"],
+        ["classification", "processing_content", "updated_at", "created_at"],
     )
     conn.close()
 
@@ -442,37 +487,43 @@ def main():
             main_rows.append([raw, " / ".join(s["sizes"]), " / ".join(s["contents"]), classify(s), " / ".join(s["companies"]),
                               " / ".join(s["paper_types"]), " / ".join(s["paper_sizes"]), " / ".join(s["paper_weights"])])
         else:
-            main_rows.append([raw, "", "", "", "", "", "", ""])
-    write_csv(args.out, ["受注番号", "仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"], main_rows)
+            main_rows.append([raw] + [""] * (len(MAIN_HEADER) - 1))
+    write_csv(args.out, MAIN_HEADER, main_rows)
 
     # 詳細 CSV: 行単位（検算用）
     base, ext = os.path.splitext(args.out)
     detail_path = f"{base}_詳細{ext or '.csv'}"
+    pos = {k: i for i, k in enumerate(keys)}
     detail_rows = []
-    for r in sorted(records, key=lambda r: (keys.index(r["key"]) if r["key"] in keys else 10**9, r["table"])):
+    for r in sorted(records, key=lambda r: (pos.get(r["key"], 10**9), r["table"], str(r["row_id"]))):
         detail_rows.append([
-            orders.get(r["key"], r["key"]), r["order_raw"], r["table"], r["row_id"], r["part"], r["finish_size"],
-            " / ".join(r["contents"]),
+            orders.get(r["key"], r["key"]), r["order_raw"], r["suffix"], r["table"], r["row_id"], r["part"],
+            " / ".join(r["sizes"]), " / ".join(r["contents"]),
             "1" if r["internal"] else "", "1" if r["outsourcing"] else "", r["work_department"],
             " / ".join(r["companies"]),
             " / ".join(f"{c}：{t}" if c and t else (c or t) for c, t in r["company_contents"]),
             " / ".join(" ".join(x for x in t if x) for t in r["papers"]),
-            ",".join(r["flags"]), str(r["updated_at"] or ""),
+            ",".join(r["flags"]), str(r["created_at"] or ""), str(r["updated_at"] or ""),
         ])
     write_csv(
         detail_path,
-        ["受注番号", "DB上の受注番号", "テーブル", "行ID", "部品", "仕上りサイズ", "加工内容", "内作フラグ", "外注フラグ",
-         "加工所(work_department)", "委託先名", "委託先ごとの加工内容", "用紙（銘柄 規格 斤量）", "返し/続き", "更新日時"],
+        ["受注番号", "DB上の受注番号", "枝", "テーブル", "行ID", "部品", "仕上りサイズ", "加工内容", "内作フラグ", "外注フラグ",
+         "加工所(work_department)", "委託先名", "委託先ごとの加工内容", "用紙（銘柄 規格 斤量）", "返し/続き", "作成日時", "更新日時"],
         detail_rows,
     )
 
     with_size = sum(1 for k in keys if summary.get(k) and summary[k]["sizes"])
     with_proc = sum(1 for k in keys if summary.get(k) and summary[k]["contents"])
     with_paper = sum(1 for k in keys if summary.get(k) and summary[k]["paper_types"])
+    only_b1 = sum(1 for k in keys if summary.get(k) and summary[k]["sizes"] == ["B1"])
     print()
     print(f"出力: {args.out}")
     print(f"      {detail_path}")
-    print(f"該当あり {hit} / {len(keys)} 件（仕上りサイズあり {with_size} 件、加工内容あり {with_proc} 件、用紙銘柄あり {with_paper} 件、該当なし {len(keys) - hit} 件）")
+    print(f"該当あり {hit} / {len(keys)} 件（仕上りサイズあり {with_size} 件、加工内容あり {with_proc} 件、"
+          f"用紙銘柄あり {with_paper} 件、該当なし {len(keys) - hit} 件）")
+    if only_b1:
+        print(f"※ 仕上りサイズが「B1」だけの案件が {only_b1} 件あります。MIS からの一括取込で入った既定値の疑いがあるので、"
+              f"詳細 CSV の作成日時（同じ時刻に大量に入っていないか）と MIS 側の値を確かめてください。")
 
 
 if __name__ == "__main__":

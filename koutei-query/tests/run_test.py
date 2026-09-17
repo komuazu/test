@@ -4,7 +4,7 @@
 export_finish_size.py の動作確認。
 
 テスト用の空 PostgreSQL に fixture.sql を流し、受注番号一覧（ゼロ埋め・小数・全角のゆれ入り）で
-スクリプトを走らせて、出力 CSV を突き合わせる。
+スクリプトを走らせて、出力 CSV を突き合わせる。SQL 版（query_finish_size.sql）も同じ結果になることを見る。
 
     python tests/run_test.py --dsn "host=... port=... dbname=... user=..."
 
@@ -21,17 +21,26 @@ import psycopg2
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "export_finish_size.py")
+SQL = os.path.join(HERE, "..", "query_finish_size.sql")
+HEADER = ["受注番号", "仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"]
 
 EXPECT = {
     # 受注番号(入力表記): (仕上りサイズ, 加工内容, 内外作区分, 委託先名, 用紙銘柄, 用紙規格, 斤量)
     "08726258": ("A4 297×210", "中綴じ12P / ミシン(筋)", "内作・外注", "八王子紙工", "A2マット", "A全判", "86.5 / 110"),
-    "8726259": ("B2 728×515", "", "", "", "オーロラコート", "菊全判", "93.5"),
+    "8726259": ("B2 728×515", "折り", "", "", "オーロラコート", "菊全判", "93.5"),
     "8726260.0": ("A4", "抜き・ポケット貼り・24P中綴じ", "外注", "松岡製本", "", "", ""),
     "8726261": ("", "", "", "", "", "", ""),
     "８７２６２６２": ("B5", "折加工（二つ折り） / 二つ折り / 折加工1", "内作", "", "", "", ""),
     "8726263": ("A3", "二つ折り", "外注", "松岡製本", "", "", ""),
     "8726264": ("", "", "", "", "", "", ""),
+    "8726265": ("A5", "", "", "", "", "", ""),
 }
+DETAIL_ROWS = 12  # tp-1..7 + wl-1 + ol-1 + ds-1 + pw-1,2
+
+
+def as_sets(t):
+    """「 / 」区切りの並び順の違いを無視して比べる。"""
+    return tuple(frozenset(x.split(" / ")) if x else frozenset() for x in t)
 
 
 def main():
@@ -58,7 +67,9 @@ def main():
         "DATABASE_NAME": params["dbname"],
         "DATABASE_USER": params.get("user", ""),
         "DATABASE_PASSWORD": params.get("password", ""),
+        "PGPASSWORD": params.get("password", ""),
     })
+    ok = True
 
     with tempfile.TemporaryDirectory() as td:
         orders = os.path.join(td, "orders.csv")
@@ -66,6 +77,7 @@ def main():
             f.write("受注番号（管理番号）,品名\r\n")
             for k in EXPECT:
                 f.write(f"{k},x\r\n")
+            f.write("0,受注番号として読めない行\r\n")
         out = os.path.join(td, "out.csv")
         r = subprocess.run([sys.executable, SCRIPT, "--orders", orders, "--out", out],
                            env=env, capture_output=True, text=True)
@@ -73,11 +85,11 @@ def main():
         if r.returncode != 0:
             print(r.stderr)
             sys.exit("スクリプトが失敗しました")
+        assert "読めなかった値 1 件" in r.stdout, "「0」を飛ばした警告が出ていない"
 
         rows = list(csv.reader(open(out, encoding="utf-8-sig")))
-        assert rows[0] == ["受注番号", "仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"], rows[0]
+        assert rows[0] == HEADER, rows[0]
         got = {r[0]: tuple(r[1:]) for r in rows[1:]}
-        ok = True
         for k, exp in EXPECT.items():
             if got.get(k) != exp:
                 ok = False
@@ -87,10 +99,11 @@ def main():
         assert list(got.keys()) == list(EXPECT.keys()), "入力の並びが保たれていない"
 
         detail = list(csv.reader(open(os.path.join(td, "out_詳細.csv"), encoding="utf-8-sig")))
-        tables = sorted({r[2] for r in detail[1:]})
+        tables = sorted({r[3] for r in detail[1:]})
         print("詳細CSV:", len(detail) - 1, "行", tables)
         assert not any(r[1] == "08799999" for r in detail[1:]), "一覧に無い受注番号を拾っている"
-        assert len(detail) - 1 == 10, f"詳細行数 {len(detail) - 1}（期待 10）"
+        assert len(detail) - 1 == DETAIL_ROWS, f"詳細行数 {len(detail) - 1}（期待 {DETAIL_ROWS}）"
+        assert any(r[1] == "08726258（表紙）" and r[2] == "（表紙）" and r[0] == "08726258" for r in detail[1:]), "枝付きの受注番号が詳細に出ていない"
 
         # 読み取り専用の確認: 同じ接続方法で書き込みが拒否されること
         conn = psycopg2.connect(args.dsn, options="-c default_transaction_read_only=on")
@@ -102,6 +115,34 @@ def main():
         except psycopg2.errors.ReadOnlySqlTransaction:
             print("OK: 読み取り専用接続で DELETE は拒否された")
         conn.close()
+
+        # SQL 版が同じ結果になること（並び順の違いは無視）
+        sql_orders = os.path.join(td, "orders_sql.csv")
+        with open(sql_orders, "w", encoding="utf-8", newline="") as f:
+            f.write("受注番号\n" + "\n".join(EXPECT) + "\n")
+        sql_out = os.path.join(td, "sql.csv")
+        cmd = ["psql", "-h", params.get("host", "localhost"), "-p", params.get("port", "5432"),
+               "-U", params.get("user", ""), "-d", params["dbname"], "-v", "ON_ERROR_STOP=1", "--csv", "-q",
+               "-c", "CREATE TEMP TABLE target(order_no text)",
+               "-c", f"\\copy target FROM '{sql_orders}' WITH (FORMAT csv, HEADER true)",
+               "-f", SQL, "-o", sql_out]
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        if r.returncode != 0:
+            ok = False
+            print("NG: SQL 版がエラー\n", r.stderr)
+        else:
+            srows = list(csv.reader(open(sql_out, encoding="utf-8")))
+            assert srows[0] == HEADER, srows[0]
+            # SQL 版は入力の表記をそのまま返すので、正規化キーで突き合わせる
+            sys.path.insert(0, os.path.join(HERE, ".."))
+            from export_finish_size import norm_order
+            sgot = {norm_order(r[0])[0]: tuple(r[1:]) for r in srows[1:]}
+            for k, exp in EXPECT.items():
+                sk = norm_order(k)[0]
+                if as_sets(sgot.get(sk, ())) != as_sets(exp):
+                    ok = False
+                    print(f"NG SQL版 {k}: 期待 {exp} / 実際 {sgot.get(sk)}")
+            print("SQL版: Python 版と一致" if ok else "SQL版: 不一致あり")
 
     print("\nALL OK" if ok else "\nFAILED")
     sys.exit(0 if ok else 1)
