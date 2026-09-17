@@ -80,7 +80,8 @@ def main():
         if r.returncode:
             print(r.stderr)
             sys.exit(1)
-        py = {row[0]: row[1:] for row in list(csv.reader(open(out, encoding="utf-8-sig")))[1:]}
+        py = {row[0]: row[1:2] + row[3:] for row in list(csv.reader(open(out, encoding="utf-8-sig")))[1:]}  # A3 列を除く
+        a3 = collections.Counter(row[2] for row in list(csv.reader(open(out, encoding="utf-8-sig")))[1:])
 
         sql_out = os.path.join(td, "sql.csv")
         cmd = ["psql", "-h", params.get("host", "localhost"), "-p", params.get("port", "5432"), "-U", params.get("user", ""),
@@ -117,6 +118,7 @@ def main():
         stat["用紙銘柄あり"] += bool(row[4])
         stat["B1だけ"] += row[0] == "B1"
     print("Python 版の内訳:", dict(stat))
+    print("A3 以下の判定:", dict(a3))
     print(f"Python 版と SQL 版の差: {diff} / {len(keys)} 件（SQL 版が「その他」を出すだけの既知の差 {explained} 件は除く）")
     sys.exit(1 if diff else 0)
 

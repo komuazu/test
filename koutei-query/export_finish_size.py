@@ -16,7 +16,8 @@ koutei-kanr30（社内工程管理システム）の本番DBから、受注番�
         --env C:\\Users\\116544\\Desktop\\UPDATE17\\web_app\\.env
 
 出力:
-    仕上りサイズ_koutei取得結果.csv        … 受注番号, 仕上りサイズ, 加工内容, 内外作区分, 委託先名, 用紙銘柄, 用紙規格, 斤量
+    仕上りサイズ_koutei取得結果.csv        … 受注番号, 仕上りサイズ, A3以下, 加工内容, 内外作区分, 委託先名, 用紙銘柄, 用紙規格, 斤量
+    仕上りサイズ_koutei取得結果_A3以下.csv … 上のうち A3 以下（判定○）だけ
     仕上りサイズ_koutei取得結果_詳細.csv   … どのテーブルのどの行から取ったか（検算用）
 """
 
@@ -400,6 +401,72 @@ def rows_from_flat_table(cur, table, keys, colmap):
 
 
 # ------------------------------------------------------------
+# 仕上りサイズが A3 以下か（オンデマンド機に載るか）
+# ------------------------------------------------------------
+A3_MM = (297, 420)
+# 規格名 → 仕上り mm（短辺, 長辺）
+SIZE_MM = {
+    "a0": (841, 1189), "a1": (594, 841), "a2": (420, 594), "a3": (297, 420), "a4": (210, 297), "a5": (148, 210),
+    "a6": (105, 148), "a7": (74, 105), "a8": (52, 74),
+    "b0": (1030, 1456), "b1": (728, 1030), "b2": (515, 728), "b3": (364, 515), "b4": (257, 364), "b5": (182, 257),
+    "b6": (128, 182), "b7": (91, 128), "b8": (64, 91),
+}
+# 名前だけで小さいと分かるもの
+SMALL_WORDS = ("ハガキ", "はがき", "葉書", "名刺", "カード", "長3", "長4", "長40", "角2", "角3", "角形", "洋形", "洋長",
+               "封筒", "ショップカード", "ポストカード", "cd", "dvd", "しおり", "チケット", "シール", "ラベル", "a4以下", "b5以下")
+# 名前だけで A3 より大きいと分かるもの
+LARGE_WORDS = ("a全", "b全", "菊全", "菊判", "四六", "菊半", "a倍", "b倍", "ポスター", "a3ノビ", "a3のび", "a3+", "sra3", "a3伸")
+
+
+def size_mm(text):
+    """'A4 297×210' / '297*210' / '29.7×21cm' から (短辺, 長辺) mm を取り出す。無ければ None。"""
+    # 「a4 297×210」の 4 を数字に巻き込まないよう、直前が英数字でない所から読む
+    m = re.search(r"(?<![a-z0-9])(\d+(?:\.\d+)?)\s*(?:mm|㎜)?\s*[x×*＊]\s*(\d+(?:\.\d+)?)\s*(mm|㎜|cm|㎝)?", text)
+    if not m:
+        return None
+    a, b = float(m.group(1)), float(m.group(2))
+    if m.group(3) in ("cm", "㎝") or (a < 50 and b < 50):
+        a, b = a * 10, b * 10
+    return (min(a, b), max(a, b))
+
+
+def judge_a3(size_text):
+    """1つの仕上りサイズ表記を '○'（A3以下）/ '×'（A3より大きい）/ '?'（分からない）にする。"""
+    t0 = unicodedata.normalize("NFKC", size_text).lower().strip()
+    t = re.sub(r"\s+", "", t0)
+    if not t:
+        return "?"
+    mm = size_mm(t0)
+    if mm:
+        return "○" if mm[0] <= A3_MM[0] + 3 and mm[1] <= A3_MM[1] + 3 else "×"
+    for w in LARGE_WORDS:
+        if w.lower() in t:
+            return "×"
+    for w in SMALL_WORDS:
+        if w.lower() in t:
+            return "○"
+    m = re.search(r"(?<![a-z0-9])([ab])(\d{1,2})(?![0-9])", t)
+    if m:
+        key = m.group(1) + m.group(2)
+        if key in SIZE_MM:
+            mm = SIZE_MM[key]
+            return "○" if mm[0] <= A3_MM[0] and mm[1] <= A3_MM[1] else "×"
+    return "?"
+
+
+def judge_a3_all(sizes):
+    """受注のサイズ一覧（部品ぶん）をまとめて判定。1つでも A3 より大きければ ×、全部不明なら「不明」。"""
+    if not sizes:
+        return "不明"
+    marks = [judge_a3(x) for x in sizes]
+    if "×" in marks:
+        return "×"
+    if "○" in marks:
+        return "○"
+    return "不明"
+
+
+# ------------------------------------------------------------
 # 受注番号ごとにまとめる
 # ------------------------------------------------------------
 def summarize(records):
@@ -443,13 +510,14 @@ def write_csv(path, header, rows):
         w.writerows(rows)
 
 
-MAIN_HEADER = ["受注番号", "仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"]
+MAIN_HEADER = ["受注番号", "仕上りサイズ", "A3以下", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"]
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--orders", required=True, help="受注番号一覧 CSV（1列目 or 「受注番号」列）")
     ap.add_argument("--out", default="仕上りサイズ_koutei取得結果.csv", help="出力 CSV")
+    ap.add_argument("--a3-only", action="store_true", help="本体 CSV も A3 以下（判定○）の受注番号だけにする")
     ap.add_argument("--env", help="koutei の .env（DATABASE_HOST などを書いたファイル）")
     ap.add_argument("--database_host", dest="database_host")
     ap.add_argument("--database_port", dest="database_port")
@@ -493,19 +561,30 @@ def main():
 
     # 本体 CSV: 入力の並びのまま、無いものは空欄
     main_rows = []
+    a3_rows = []
     hit = 0
+    a3_count = {"○": 0, "×": 0, "不明": 0}
     for key, raw in orders.items():
         s = summary.get(key)
         if s:
             hit += 1
-            main_rows.append([raw, " / ".join(s["sizes"]), " / ".join(s["contents"]), classify(s), " / ".join(s["companies"]),
-                              " / ".join(s["paper_types"]), " / ".join(s["paper_sizes"]), " / ".join(s["paper_weights"])])
+            a3 = judge_a3_all(s["sizes"])
+            row = [raw, " / ".join(s["sizes"]), a3, " / ".join(s["contents"]), classify(s), " / ".join(s["companies"]),
+                   " / ".join(s["paper_types"]), " / ".join(s["paper_sizes"]), " / ".join(s["paper_weights"])]
         else:
-            main_rows.append([raw] + [""] * (len(MAIN_HEADER) - 1))
+            a3 = "不明"
+            row = [raw, "", a3] + [""] * (len(MAIN_HEADER) - 3)
+        a3_count[a3] += 1
+        if a3 == "○":
+            a3_rows.append(row)
+        if not args.a3_only or a3 == "○":
+            main_rows.append(row)
     write_csv(args.out, MAIN_HEADER, main_rows)
+    base, ext = os.path.splitext(args.out)
+    a3_path = f"{base}_A3以下{ext or '.csv'}"
+    write_csv(a3_path, MAIN_HEADER, a3_rows)
 
     # 詳細 CSV: 行単位（検算用）
-    base, ext = os.path.splitext(args.out)
     detail_path = f"{base}_詳細{ext or '.csv'}"
     pos = {k: i for i, k in enumerate(keys)}
     detail_rows = []
@@ -531,8 +610,11 @@ def main():
     with_paper = sum(1 for k in keys if summary.get(k) and summary[k]["paper_types"])
     only_b1 = sum(1 for k in keys if summary.get(k) and summary[k]["sizes"] == ["B1"])
     print()
-    print(f"出力: {args.out}")
+    print(f"出力: {args.out}" + ("（A3 以下だけ）" if args.a3_only else ""))
+    print(f"      {a3_path}（A3 以下だけ）")
     print(f"      {detail_path}")
+    print(f"A3 以下の判定: ○ {a3_count['○']} 件、× {a3_count['×']} 件、不明 {a3_count['不明']} 件"
+          f"（× は 1 部品でも A3 より大きいもの。不明は仕上りサイズが無いか読めないもの）")
     print(f"該当あり {hit} / {len(keys)} 件（仕上りサイズあり {with_size} 件、加工内容あり {with_proc} 件、"
           f"用紙銘柄あり {with_paper} 件、該当なし {len(keys) - hit} 件）")
     if only_b1:
