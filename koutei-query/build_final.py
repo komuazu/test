@@ -407,6 +407,9 @@ def write_summary(wb, months, ranges, stats, base_name):
     if stats.get("dropped"):
         notes += [f"・品名に {stats['drop_words']} を含む {stats['dropped']} 行（通し数 {stats['drop_pass']:,}）は外してある。"
                   "本刷りではないため"]
+    if stats.get("force_a3"):
+        notes += [f"・管理番号 {'、'.join(stats['force_a3'])} は、機械判定では A3 より大きかったが A3 以下として扱っている"
+                  "（仕上りサイズが MIS 一括取込の既定値「B1」になっていたため）。「元の帳票」列に 手当て と出る"]
     if stats.get("blank_inout"):
         notes += [f"・内外作が空だった行には「{stats['blank_inout']}」を入れてある"
                   "（外注一覧に記録が無い＝内作、という扱い）。委託先が入っている行はそのまま"]
@@ -452,6 +455,9 @@ def main():
     ap.add_argument("--conflict-keep-doc", action="append", default=[], metavar="語",
                     help="加工内容にこの語を含む行は、--conflict-size DB でも帳票の仕上りサイズを使う。"
                          "中綴じ・無線綴じは DB に折る前の見開き寸法が混ざるため。何度でも指定できる")
+    ap.add_argument("--force-a3", action="append", default=[], metavar="管理番号",
+                    help="この管理番号は A3 以下（○）として扱う。仕上りサイズが MIS 一括取込の既定値「B1」に"
+                         "なっているなど、機械判定が実物と合わないときの手当て。何度でも指定できる")
     ap.add_argument("--exclude-name", action="append", default=[], metavar="語",
                     help="品名にこの語を含む行を外す（何度でも指定できる）。例: --exclude-name 本機校正")
     ap.add_argument("--blank-process", metavar="語",
@@ -529,6 +535,27 @@ def main():
             if n_keep:
                 msg += f"。うち {n_keep} 件は「{'・'.join(args.conflict_keep_doc)}」なので帳票を採った"
             print(msg)
+    if args.force_a3:            # 機械判定が実物と合わない行の手当て。出どころ欄に「手当て」を残す
+        want = {}
+        for v in args.force_a3:
+            k, _ = norm_order(v)
+            if k:
+                want[k] = v
+        done = []
+        for k in want:
+            d = docs.get(k)
+            if d is None:
+                print(f"※ --force-a3 {want[k]} は帳票にも DB にも無いので手当てできません")
+                continue
+            d["A3以下"] = "○"
+            if "手当て" not in d["帳票"]:
+                d["帳票"] = list(d["帳票"]) + ["手当て"]
+            done.append(k)
+        stats_force = done
+        print(f"A3 以下として扱う手当て: {len(done)} 件（{'、'.join(done) or 'なし'}）")
+    else:
+        stats_force = []
+
     if args.blank_inout:         # 外注一覧に記録が無い＝内作。委託先が入っている行はそのまま
         n_bi = n_skip = 0
         for d in docs.values():
@@ -560,9 +587,11 @@ def main():
              "dropped": len(dropped), "drop_words": "・".join(args.exclude_name),
              "drop_pass": sum(x["通し数"] or 0 for x in dropped),
              "blank_process": args.blank_process, "blank_inout": args.blank_inout, "filled": 0,
+             "force_a3": [],
              "seizo": sum(d["doc"] == "製造指示書" for d in all_docs), "insatsu": sum(d["doc"] == "印刷指示書" for d in all_docs),
              "itaku": sum(d["doc"] == "外注委託依頼書" for d in all_docs)}
     stats["filled"] = n_fill
+    stats["force_a3"] = stats_force
     hit = sum(1 for x in small if x["key"] in docs)
     src_rows = collections.Counter(docs[x["key"]].get("_src") for x in small if x["key"] in docs)
     print(f"帳票: {len(all_docs)} 通・受注 {n_doc} 件 → 母集団の埋まった行 {hit} / {len(small)}"
