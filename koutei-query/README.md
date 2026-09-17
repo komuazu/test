@@ -7,10 +7,12 @@
 ```
 koutei-query/
 ├── export_finish_size.py     … 本体（丸本PC で動かす）
+├── make_excel.py             … 取得結果を元の Excel の月別シートに流し込み、資料の形に整える
 ├── query_finish_size.sql     … 同じことを psql だけでやる版（検算用）
 ├── tests/fixture.sql         … 動作確認用のダミーデータ（本番に流さない）
 ├── tests/run_test.py         … 動作確認（Python 版と SQL 版の両方）
-└── tests/compare_on_dump.py  … 本番ダンプで Python 版と SQL 版を全件突き合わせる
+├── tests/compare_on_dump.py  … 本番ダンプで Python 版と SQL 版を全件突き合わせる
+└── tests/test_excel.py       … make_excel.py の動作確認（DB 不要）
 ```
 
 ---
@@ -150,6 +152,32 @@ DB 側も同じ規則で比べるので、どちらの表記で入っていて�
 
 ---
 
+## 3.5 Excel に流し込む（`make_excel.py`）
+
+取得結果 CSV を、元の Excel（`平版印刷_オンデマンド移行検討_3000通し以下一覧.xlsx`）の月別シートに流し込み、
+資料として見られる形に整える。DB は使わないので、どの PC でも動く（openpyxl が要る）。
+
+```bat
+python make_excel.py --base 平版印刷_オンデマンド移行検討_3000通し以下一覧.xlsx --result 仕上りサイズ_koutei取得結果.csv
+```
+
+できるもの: `平版印刷_オンデマンド移行検討_3000通し以下一覧_koutei反映.xlsx`（**元のファイルは書き換えない**）
+
+| すること | 中身 |
+|---|---|
+| 月別シートを見つける | シート名に「月」があり、先頭 15 行に「受注番号」か「管理番号」の見出しがあるシート。サマリーなど他のシートは元のまま |
+| 空欄だけ埋める | 「仕上りサイズ」「備考」が空の行だけ、koutei の値で埋めて **水色** に塗る。手で記入済みの 46 件は触らない |
+| 備考の文面 | `外注（松岡製本）：抜き・ポケット貼り・24P中綴じ`、`内作：折加工（二つ折り）`、`内作・外注（八王子紙工）：中綴じ12P / ミシン(筋)` の形 |
+| 右端に列を足す | A3以下(koutei判定)・加工内容・内外作・委託先名・用紙銘柄・用紙規格・斤量・仕上りサイズ(koutei)。見出しは濃い青 |
+| 見た目 | 見出し行を紺色、罫線、1 行おきの薄い灰色、列幅、ウィンドウ枠の固定、オートフィルタ、A4 横 1 枚幅の印刷設定。A3以下は 緑=○／橙=×／黄=不明 |
+| 集計シート | 「集計（koutei）」を末尾に足す。A3以下と内外作の件数は COUNTIF の式で、月シートを直せば追従する。凡例と注意書き付き |
+
+* 受注番号は `8726258`／`08726258`／`8726258.0` のどれで入っていても突き合わせる
+* `--base` を省くと、取得結果だけから「一覧」シートの Excel を作る（月別には分かれない）
+* フォントは Meiryo。表題は見出し行の上が空いているときだけ入れる
+
+---
+
 ## 4. 動作確認
 
 本番に触らずに確かめるには、空の PostgreSQL に `tests/fixture.sql` を流して走らせる。
@@ -169,6 +197,12 @@ python tests/run_test.py --dsn "host=localhost port=5432 dbname=koutei_test user
 ```bash
 psql -d koutei_dump_test -f <koutei>/web_app/data/pg_backup.sql
 python tests/compare_on_dump.py --dsn "host=localhost port=5432 dbname=koutei_dump_test user=koutei_dev"
+```
+
+Excel 流し込みは DB 無しで確かめられる（元 Excel のダミーを作って流し込み、記入済みの欄が残ることと集計の式を見る）:
+
+```bash
+python tests/test_excel.py
 ```
 
 2026-09-17 の結果: 差 0 件（SQL 版が「その他」を出すだけの既知の差 16 件を除く）。
