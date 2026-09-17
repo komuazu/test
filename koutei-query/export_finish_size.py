@@ -445,7 +445,7 @@ def judge_a3(size_text):
     for w in SMALL_WORDS:
         if w.lower() in t:
             return "○"
-    m = re.search(r"(?<![a-z0-9])([ab])(\d{1,2})(?![0-9])", t)
+    m = re.search(r"(?<![a-z0-9])([ab])(\d{1,2})(?![0-9])", t0)
     if m:
         key = m.group(1) + m.group(2)
         if key in SIZE_MM:

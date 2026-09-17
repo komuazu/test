@@ -162,7 +162,7 @@ def merge(docs):
         papers = base.get("用紙") or next((d.get("用紙") for d in ds if d.get("用紙")), [])
         r["用紙銘柄"] = " / ".join(uniq(p["銘柄"] for p in papers))
         r["用紙規格"] = " / ".join(uniq(p["規格"] for p in papers))
-        r["連量"] = " / ".join(uniq(str(p["連量"]).rstrip("0").rstrip(".") if re.fullmatch(r"[\d.]+", str(p["連量"])) else p["連量"] for p in papers))
+        r["連量"] = " / ".join(uniq(re.sub(r"\.0+$", "", str(p["連量"])) for p in papers))
         # 加工: 全帳票から集める
         inout, sites, works, raw = [], [], [], []
         for d in ds:

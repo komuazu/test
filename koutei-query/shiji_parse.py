@@ -18,12 +18,14 @@ import unicodedata
 DATE = r"\d{4}/\d{1,2}/\d{1,2}"
 SIZE_MM = r"\d{2,4}(?:\.\d+)?[×x*]\d{2,4}(?:\.\d+)?"
 # 用紙規格（全判の呼び名）
-SHEET_SIZES = r"(?:A全判|B全判|菊全判|四六判|菊半裁|A半裁|B半裁|四六半裁|菊四裁|A倍判|B倍判|ハトロン判|新聞判|規格外|[A-Za-z0-9]*判)"
+SHEET_SIZES = r"(?:\S*判[縦横]?|四六半|四六全|菊半|菊全|A全|B全|規格外)"
 # 加工作業として拾う言葉（長いものを先に）
 PROCESS_WORDS = [
+    r"[ﾏマ][ｯッ][ﾄト]PP(?:加工)?", r"[ｸグ][ﾛロ][ｽス]PP(?:加工)?", r"両面PP", r"片面PP",
+    r"[^\s]*[ﾗラ][ﾍベ][ﾙル]貼り?", r"封印",
     r"大巻[三四]つ折り?", r"小巻[三四]つ折り?", r"巻き?[三四]つ折り?", r"外[三四]つ折り?", r"観音折り?", r"蛇腹折り?", r"DM折り?",
     r"[二三四]つ折り?", r"十字折り?", r"クロス折り?", r"Z折り?", r"折り?加工", r"折り",
-    r"中綴じ\d*[Pp]?", r"無線綴じ\d*[Pp]?", r"あじろ綴じ\d*[Pp]?", r"PUR綴じ?\d*[Pp]?", r"平綴じ", r"針金綴じ", r"糸かがり", r"上製本", r"製本",
+    r"中綴じ ?\d*[Pp]?", r"無線綴じ ?\d*[Pp]?", r"あじろ綴じ ?\d*[Pp]?", r"PUR綴じ? ?\d*[Pp]?", r"平綴じ", r"針金綴じ", r"糸かがり", r"上製本", r"製本",
     r"平化粧断裁", r"化粧断裁", r"断裁", r"断ち", r"ｽﾘｯﾀｰ|スリッター|スリット",
     r"抜きミシン", r"ミシン\(?[^\s)]*\)?", r"筋押し", r"筋入れ", r"スジ入れ", r"筋", r"型抜き", r"抜き", r"角丸", r"穴[あ開]け", r"穴",
     r"PP(?:加工|貼り)?", r"マットPP", r"グロスPP", r"箔押し", r"エンボス", r"ニス", r"ラミネート", r"ラミ",
@@ -80,7 +82,7 @@ def parse_seizo(text, title=""):
     """製造指示書。通常の PDF は表の行ごとに 1 行、Drive が Markdown 風に返したものはセルごとに 1 行になるので、
     全部を 1 行につないでから見出し語で切り出す。"""
     d = {"doc": "製造指示書"}
-    t = text.replace("\r", "").replace("　", " ")
+    t = text.replace("\r", "").replace("\u3000", " ").replace("\\*", "×")
     flat = re.sub(r"\s+", " ", t)
     m = re.search(r"発行日 (\S+ \S+) 【製造指示書】", flat)
     d["発行日"] = m.group(1) if m else ""
@@ -105,11 +107,14 @@ def parse_seizo(text, title=""):
         d["製品名"] = product_from_title(title)
 
     # 受注数量 実内見本数 実外見本数 仕上りサイズ 総頁数
-    m = re.search(r"前回受注番号 (.+?) 受注日 入稿日 下版日", flat)
+    m = re.search(r"前回受注番号 (.+)", flat)
     if m:
-        tk = toks(m.group(1))
-        # 先頭に見出し語（受注数量 …色数）が混ざる並びもあるので、最初の数字から
-        while tk and not is_int(tk[0]):
+        tk = []
+        for x in toks(m.group(1)):
+            if x in ("受注日", "部品") or x.startswith("【") or re.fullmatch(DATE, x) or re.fullmatch(r"\d+\+\d+", x) or re.fullmatch(r"\d{8}", x):
+                break
+            tk.append(x)
+        while tk and not is_int(tk[0]):  # 先頭に見出し語が混ざる並びもある
             tk.pop(0)
         if len(tk) >= 4 and is_int(tk[0]) and is_int(tk[1]) and is_int(tk[2]):
             d["受注数量"] = to_int(tk[0])
@@ -152,11 +157,11 @@ def parse_seizo(text, title=""):
     seg = re.search(r"加工予備枚数 備考 (.*?) 部品 内・外作 印刷工場", flat)
     if seg:
         s = seg.group(1)
-        for m in re.finditer(rf"(?:([^\d\s,]+\d) )?(当方|先方|支給) (.+?) (\S*判|規格外) ({SIZE_MM})(?: (\d+\.\d+|\d+))?", s):
+        for m in re.finditer(rf"(?:([^\d\s,]+\d) )?(当方|先方|支給|当社) (.+?) ({SHEET_SIZES}) ({SIZE_MM})(?: (\d+\.\d+|\d+))?", s):
             part, side, brand, size, mm, ream = m.groups()
             grain = ""
             brand_toks = toks(brand)
-            while brand_toks and re.fullmatch(r"平|巻|[YT]目?|[\d.]+k|\S*判|規格外", brand_toks[-1]):
+            while brand_toks and re.fullmatch(r"平|巻|[YT]目?|[\d.]+k|\S*判[縦横]?|四六半|四六全|規格外", brand_toks[-1]):
                 x = brand_toks.pop()
                 if re.fullmatch(r"[YT]目?", x):
                     grain = x[0]
@@ -173,12 +178,12 @@ def parse_seizo(text, title=""):
 
     # 印刷（通し数）: 色数「4＋4」の後ろの 5 つの数字 = 台数 面付 通し数 印刷予備 加工予備
     prints = []
-    seg = re.search(r"コメント\(部品\) (.*?) 部品 内・外作 加工所", flat)
+    seg = re.search(r"部品 内・外作 印刷工場 (.*?) 部品 内・外作 加工所", flat)
     if seg:
         tk = [x for x in toks(seg.group(1)) if x not in PRINT_HEADER_WORDS]
         i = 0
         while i < len(tk):
-            if re.fullmatch(r"\d+[＋+]\d+", tk[i]):
+            if re.fullmatch(r"\d[＋+×]\d", tk[i]):
                 nums = []
                 j = i + 1
                 while j < len(tk) and len(nums) < 5:
@@ -188,7 +193,7 @@ def parse_seizo(text, title=""):
                         break
                     j += 1
                 before = tk[max(0, i - 4):i]
-                machine = next((x for x in reversed(before) if re.fullmatch(r"(菊全|A全|B全|菊半|A半|4/6全|四六全|四六|オンデマンド|POD|\S*UV\S*|\S*機)", x)), "")
+                machine = next((x for x in reversed(before) if re.fullmatch(r"(菊全|A全|B全|菊半|A半|4/6全|四六全|四六半|四六|オンデマンド|POD|\S*UV\S*|\S*機)", x)), "")
                 inout = next((x for x in before if x in ("内作", "外作")), "")
                 part = next((x for x in before if re.fullmatch(r"[^\d\s,]+\d", x) and x != machine), "")
                 row = {"部品": part, "内外": inout, "機種": machine, "色数": tk[i]}
@@ -217,7 +222,7 @@ def parse_seizo(text, title=""):
                 if nxt and not re.fullmatch(DATE, nxt) and not is_int(nxt) and not PROCESS_RE.fullmatch(nxt) \
                         and not re.fullmatch(r"[^\d\s,]+\d", nxt) and nxt not in ("梱包", "納品", "配送"):
                     proc["加工所"].append(nxt)
-            elif x in INTERNAL_SITES:
+            elif x in INTERNAL_SITES and x != "社内":
                 proc["加工所"].append(x)
             elif re.fullmatch(DATE, x):
                 proc["加工日程"].append(x)
@@ -233,7 +238,7 @@ def parse_seizo(text, title=""):
         inn = [x for x in proc["加工所"] if x in INTERNAL_SITES]
         if "外作" in tk or "外注" in tk or ext or "その他外注" in proc["作業"]:
             proc["内外"] = "外注"
-        if "内作" in tk or inn:
+        if "内作" in tk or "社内" in tk or inn:
             proc["内外"] = "内作・外注" if proc["内外"] == "外注" else "内作"
     d["加工"] = proc
     return d
@@ -301,8 +306,8 @@ def parse_itaku(text, title=""):
         for x in tk[1:]:
             if re.fullmatch(SHEET_SIZES, x):
                 size = x
-            elif re.fullmatch(r"[\d.]+k?g?", x):
-                ream = x
+            elif re.fullmatch(r"[\d.]+(?:kg|k|g)?", x):
+                ream = re.sub(r"(kg|k|g)$", "", x)
             elif re.fullmatch(r"[YT]目?", x):
                 grain = x[0]
             else:
