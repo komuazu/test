@@ -78,6 +78,30 @@ def uniq(seq):
     return out
 
 
+def site_key(name):
+    """委託先名の表記ゆれ（㈱松岡製本／松岡製本／八王子紙工株式会社）を同じ会社とみなすための鍵。"""
+    import unicodedata
+    k = unicodedata.normalize("NFKC", name)
+    k = re.sub(r"(株式会社|有限会社|\(株\)|\(有\)|㈱|㈲|様)", "", k)
+    return re.sub(r"\s+", "", k)
+
+
+def uniq_sites(seq):
+    """同じ会社は 1 つにまとめ、いちばん長い（正式に近い）表記を残す。"""
+    best = {}
+    order = []
+    for x in seq:
+        if not x:
+            continue
+        k = site_key(x)
+        if k not in best:
+            best[k] = x
+            order.append(k)
+        elif len(x) > len(best[k]):
+            best[k] = x
+    return [best[k] for k in order]
+
+
 def load_docs(textdir):
     docs = []
     for p in sorted(glob.glob(os.path.join(textdir, "*.json"))):
@@ -151,7 +175,7 @@ def merge(docs):
                 raw.append(f"[{d['doc']}] {k['原文']}")
         inout = uniq(inout)
         r["内外作"] = "内作・外注" if len(inout) > 1 else (inout[0] if inout else "")
-        r["加工所"] = " / ".join(uniq(sites))
+        r["加工所"] = " / ".join(uniq_sites(sites))
         r["加工内容"] = " / ".join(uniq(works))
         r["加工原文"] = "\n".join(uniq(raw))
         r["A3以下"] = judge_a3_all([r["仕上りサイズ"]]) if r["仕上りサイズ"] else "不明"
