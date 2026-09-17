@@ -51,6 +51,12 @@ companies AS (
     UNION SELECT regexp_replace(order_number, '^0+', ''), NULLIF(trim(outsourcing_company), '') FROM outsourcing_list
     UNION SELECT regexp_replace(order_number, '^0+', ''), NULLIF(trim(outsourcing_company), '') FROM delivery_schedule
 ),
+papers AS (  -- 用紙（本体 JSON と、部品ごとの order_paper_info[] / papers[]）
+    SELECT k, NULLIF(trim(d->>'paper_type'), '') AS t, NULLIF(trim(d->>'standard_size'), '') AS z, NULLIF(trim(d->>'paper_weight'), '') AS w FROM ev
+    UNION SELECT k, NULLIF(trim(pi->>'paper_type'), ''), NULLIF(trim(pi->>'standard_size'), ''), NULLIF(trim(pi->>'paper_weight'), '')
+      FROM ev, jsonb_array_elements(CASE WHEN jsonb_typeof(d->'order_paper_info') = 'array' THEN d->'order_paper_info'
+                                         WHEN jsonb_typeof(d->'papers') = 'array' THEN d->'papers' ELSE '[]'::jsonb END) pi
+),
 flags AS (
     SELECT k,
            bool_or(COALESCE((d->>'internal_work') IN ('true','1'), false) OR NULLIF(trim(d->>'work_department'), '') IS NOT NULL) AS internal,
@@ -65,6 +71,9 @@ agg AS (
            (SELECT string_agg(DISTINCT v, ' / ') FROM sizes     WHERE sizes.k = t.k AND v IS NOT NULL) AS finish_size,
            (SELECT string_agg(DISTINCT v, ' / ') FROM contents  WHERE contents.k = t.k AND v IS NOT NULL) AS content,
            (SELECT string_agg(DISTINCT v, ' / ') FROM companies WHERE companies.k = t.k AND v IS NOT NULL) AS company,
+           (SELECT string_agg(DISTINCT t, ' / ') FROM papers WHERE papers.k = t.k AND t IS NOT NULL) AS paper_type,
+           (SELECT string_agg(DISTINCT z, ' / ') FROM papers WHERE papers.k = t.k AND z IS NOT NULL) AS paper_size,
+           (SELECT string_agg(DISTINCT w, ' / ') FROM papers WHERE papers.k = t.k AND w IS NOT NULL) AS paper_weight,
            (SELECT bool_or(internal)    FROM flags WHERE flags.k = t.k) AS internal,
            (SELECT bool_or(outsourcing) FROM flags WHERE flags.k = t.k) AS outsourcing
       FROM t
@@ -75,6 +84,9 @@ SELECT order_no                                   AS "受注番号",
        CASE WHEN company IS NOT NULL OR outsourcing THEN
                  CASE WHEN internal THEN '内作・外注' ELSE '外注' END
             WHEN internal THEN '内作' ELSE '' END AS "内外作区分",
-       COALESCE(company, '')                      AS "委託先名"
+       COALESCE(company, '')                      AS "委託先名",
+       COALESCE(paper_type, '')                   AS "用紙銘柄",
+       COALESCE(paper_size, '')                   AS "用紙規格",
+       COALESCE(paper_weight, '')                 AS "斤量"
   FROM agg
  ORDER BY order_no;

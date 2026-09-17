@@ -33,11 +33,13 @@ CREATE TABLE processing_works (
 INSERT INTO timeline_processes (id, date, machine, "startHour", duration, name, "orderNumber", data) VALUES
 ('tp-1', '2026-05-12', 1, 9, 3, 'ﾊﾟﾝﾌﾚｯﾄ', '08726258',
  '{"client_name":"㈱テスト","product_name":"ﾊﾟﾝﾌﾚｯﾄ","part_type":"本体","finish_size":"A4 297×210",
+   "paper_type":"A2マット","standard_size":"A全判","paper_weight":"86.5",
    "internal_work":true,"outsourcing":true,"work_department":"第二工場",
    "finish_processing_name":"中綴じ12P",
    "outsourcing_items":[{"company":"八王子紙工","processing_content":"ミシン(筋)","delivery_date":"2026-05-20"}]}'),
 ('tp-2', '2026-05-12', 1, 12, 1, 'ﾊﾟﾝﾌﾚｯﾄ', '08726258',
  '{"client_name":"㈱テスト","product_name":"ﾊﾟﾝﾌﾚｯﾄ","part_type":"表紙","finish_size":"A4 297×210",
+   "paper_type":"A2マット","standard_size":"A全判","paper_weight":"110",
    "internal_work":1,"work_department":"第二工場","finish_processing_name":"中綴じ12P"}'),
 -- 返しイベント（同じ受注番号の重複）。値が二重に数えられないこと
 ('tp-3', '2026-05-13', 1, 9, 1, 'ﾊﾟﾝﾌﾚｯﾄ', '08726258',
@@ -53,7 +55,8 @@ INSERT INTO timeline_processes (id, date, machine, "startHour", duration, name, 
 
 -- 8726259: Waiting List にしか無い（未配置）。仕上りサイズだけ
 INSERT INTO waiting_list (id, "orderNumber", name, data) VALUES
-('wl-1', '08726259', 'ﾎﾟｽﾀｰ', '{"finish_size":"B2 728×515","internal_work":false,"outsourcing":false}');
+('wl-1', '08726259', 'ﾎﾟｽﾀｰ', '{"finish_size":"B2 728×515","internal_work":false,"outsourcing":false,
+   "order_paper_info":[{"partName":"本体","paper_type":"オーロラコート","standard_size":"菊全判","paper_weight":"93.5"}]}');
 
 -- 8726260: 外注依頼書テーブルにしか無い
 INSERT INTO outsourcing_list (order_number, customer_name, product_name, finish_size, outsourcing_company, processing_content) VALUES

@@ -30,6 +30,7 @@ koutei-kanr30 が持っているのは、MIS の CSV から取り込んだ項目
 | 仕上りサイズ | `timeline_processes.data` / `waiting_list.data` の JSON `finish_size`、`outsourcing_list.finish_size`、`delivery_schedule.finish_size` | MIS CSV の「製品仕上サイズ名」（`calendar_ui.html` の取込）または手入力 |
 | 加工内容 | JSON `finish_processing_name` / `finish_processing` / `finishProcessing` / `processing_content` / `finish_process`、`outsourcing_items[].processing_content`、`outsourcing_list.processing_content`、`delivery_schedule.processing_content`、`processing_works.processing_content` / `classification` | MIS CSV の「仕上加工名」または手入力 |
 | 内作／外注 | JSON `internal_work` / `outsourcing` / `work_department`（第二工場）、`processing_works` に行があれば内作、`outsourcing_list` に行があれば外注 | 画面のチェック |
+| 用紙銘柄・規格・斤量 | JSON `paper_type` / `standard_size` / `paper_weight`、部品ごとの `order_paper_info[]`・`papers[]` の同名キー | 画面の用紙選択（`paper_master` から） |
 | 委託先名 | JSON `outsourcing_company` / `outsource_name` / `outsourcing_items[].company`、`outsourcing_list.outsourcing_company`、`delivery_schedule.outsourcing_company` | MIS CSV の「外注先名」または手入力 |
 
 つまり **加工所（第二工場など）・加工日程・台数は「外注委託依頼書」を出した案件と、内作加工を登録した案件にしか入っていない。**
@@ -84,8 +85,10 @@ DB 側も同じ規則（`regexp_replace(..., '^0+', '')`）で比べるので、
 ### `仕上りサイズ_koutei取得結果.csv`（Excel にそのまま貼る用）
 
 ```
-受注番号, 仕上りサイズ, 加工内容, 内外作区分, 委託先名
+受注番号, 仕上りサイズ, 加工内容, 内外作区分, 委託先名, 用紙銘柄, 用紙規格, 斤量
 ```
+
+* 用紙の3列は依頼メモの5列に後から足したもの。要らなければ Excel 側で読み飛ばせばよい
 
 * 入力 CSV の並びのまま、**受注番号は入力の表記のまま**返す（XLOOKUP のキーにそのまま使える）
 * 該当が無い受注番号は空欄
@@ -110,7 +113,7 @@ python tests/run_test.py --dsn "host=localhost port=5432 dbname=koutei_test user
 ```
 
 * DB 名に `test` が入っていないと止まる（本番に fixture を流さないための安全弁）
-* 7 件の受注番号（ゼロ埋め・小数・全角・該当なし・壊れた JSON を含む）で 5 列を突き合わせる
+* 7 件の受注番号（ゼロ埋め・小数・全角・該当なし・壊れた JSON を含む）で 8 列を突き合わせる
 * `query_finish_size.sql` も同じ fixture で同じ結果になることを確認済み（2026-09-17）。
   こちらは `pg_input_is_valid()` を使うので PostgreSQL 16 以降
 

@@ -16,7 +16,7 @@ koutei-kanr30（社内工程管理システム）の本番DBから、受注番�
         --env C:\\Users\\116544\\Desktop\\UPDATE17\\web_app\\.env
 
 出力:
-    仕上りサイズ_koutei取得結果.csv        … 受注番号, 仕上りサイズ, 加工内容, 内外作区分, 委託先名
+    仕上りサイズ_koutei取得結果.csv        … 受注番号, 仕上りサイズ, 加工内容, 内外作区分, 委託先名, 用紙銘柄, 用紙規格, 斤量
     仕上りサイズ_koutei取得結果_詳細.csv   … どのテーブルのどの行から取ったか（検算用）
 """
 
@@ -78,6 +78,12 @@ def add_unique(lst, value):
     value = clean(value)
     if value and value not in lst:
         lst.append(value)
+
+
+def add_paper(rec, paper_type, standard_size, paper_weight):
+    t = (clean(paper_type), clean(standard_size), clean(paper_weight))
+    if any(t) and t not in rec["papers"]:
+        rec["papers"].append(t)
 
 
 # ------------------------------------------------------------
@@ -238,6 +244,7 @@ def rows_from_event_table(cur, table, keys):
             "key": norm_order(onum),
             "part": clean(d.get("part_type") or d.get("part_name") or d.get("partName")),
             "finish_size": clean(d.get("finish_size") or d.get("finished_size") or d.get("finishSize")),
+            "papers": [],  # (銘柄, 規格, 斤量)
             "contents": [],
             "internal": truthy(d.get("internal_work")),
             "outsourcing": truthy(d.get("outsourcing")),
@@ -249,6 +256,13 @@ def rows_from_event_table(cur, table, keys):
         }
         for k in ("finish_processing_name", "finish_processing", "finishProcessing", "processing_content", "finish_process"):
             add_unique(rec["contents"], d.get(k))
+        add_paper(rec, d.get("paper_type") or d.get("paperType"), d.get("standard_size"), d.get("paper_weight") or d.get("paperWeight"))
+        for lst_key in ("order_paper_info", "papers"):  # 部品ごとの用紙（外注委託依頼書で使う形）
+            lst = d.get(lst_key)
+            if isinstance(lst, list):
+                for pi in lst:
+                    if isinstance(pi, dict):
+                        add_paper(rec, pi.get("paper_type"), pi.get("standard_size"), pi.get("paper_weight"))
         for k in ("outsourcing_company", "outsource_name"):
             add_unique(rec["companies"], d.get(k))
         items = d.get("outsourcing_items")
@@ -298,6 +312,7 @@ def rows_from_flat_table(cur, table, keys, colmap):
             "key": norm_order(row[1]),
             "part": clean(d.get("part_name")),
             "finish_size": clean(d.get("finish_size")),
+            "papers": [],
             "contents": [],
             "internal": False,
             "outsourcing": truthy(d.get("outsourcing")),
@@ -309,6 +324,7 @@ def rows_from_flat_table(cur, table, keys, colmap):
         }
         add_unique(rec["contents"], d.get("processing_content"))
         add_unique(rec["companies"], d.get("outsourcing_company"))
+        add_paper(rec, d.get("paper_type"), d.get("standard_size"), d.get("paper_weight"))
         if table == "processing_works":
             # 内作加工の作業一覧。classification は 折加工1／折加工2／中綴じ加工 などの機械区分
             rec["internal"] = True
@@ -336,9 +352,14 @@ def summarize(records):
     for r in records:
         s = by_key.setdefault(
             r["key"],
-            {"sizes": [], "contents": [], "companies": [], "internal": False, "outsourcing": False, "depts": []},
+            {"sizes": [], "contents": [], "companies": [], "internal": False, "outsourcing": False, "depts": [],
+             "paper_types": [], "paper_sizes": [], "paper_weights": []},
         )
         add_unique(s["sizes"], r["finish_size"])
+        for pt, ps, pw in r["papers"]:
+            add_unique(s["paper_types"], pt)
+            add_unique(s["paper_sizes"], ps)
+            add_unique(s["paper_weights"], pw)
         for c in r["contents"]:
             add_unique(s["contents"], c)
         for c in r["companies"]:
@@ -401,7 +422,7 @@ def main():
     records += rows_from_flat_table(
         cur, "delivery_schedule", keys,
         ["finish_size", "work_department", "outsourcing", "outsourcing_company", "processing_content",
-         "part_name", "updated_at"],
+         "part_name", "paper_type", "standard_size", "paper_weight", "updated_at"],
     )
     records += rows_from_flat_table(
         cur, "processing_works", keys,
@@ -418,10 +439,11 @@ def main():
         s = summary.get(key)
         if s:
             hit += 1
-            main_rows.append([raw, " / ".join(s["sizes"]), " / ".join(s["contents"]), classify(s), " / ".join(s["companies"])])
+            main_rows.append([raw, " / ".join(s["sizes"]), " / ".join(s["contents"]), classify(s), " / ".join(s["companies"]),
+                              " / ".join(s["paper_types"]), " / ".join(s["paper_sizes"]), " / ".join(s["paper_weights"])])
         else:
-            main_rows.append([raw, "", "", "", ""])
-    write_csv(args.out, ["受注番号", "仕上りサイズ", "加工内容", "内外作区分", "委託先名"], main_rows)
+            main_rows.append([raw, "", "", "", "", "", "", ""])
+    write_csv(args.out, ["受注番号", "仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"], main_rows)
 
     # 詳細 CSV: 行単位（検算用）
     base, ext = os.path.splitext(args.out)
@@ -434,21 +456,23 @@ def main():
             "1" if r["internal"] else "", "1" if r["outsourcing"] else "", r["work_department"],
             " / ".join(r["companies"]),
             " / ".join(f"{c}：{t}" if c and t else (c or t) for c, t in r["company_contents"]),
+            " / ".join(" ".join(x for x in t if x) for t in r["papers"]),
             ",".join(r["flags"]), str(r["updated_at"] or ""),
         ])
     write_csv(
         detail_path,
         ["受注番号", "DB上の受注番号", "テーブル", "行ID", "部品", "仕上りサイズ", "加工内容", "内作フラグ", "外注フラグ",
-         "加工所(work_department)", "委託先名", "委託先ごとの加工内容", "返し/続き", "更新日時"],
+         "加工所(work_department)", "委託先名", "委託先ごとの加工内容", "用紙（銘柄 規格 斤量）", "返し/続き", "更新日時"],
         detail_rows,
     )
 
     with_size = sum(1 for k in keys if summary.get(k) and summary[k]["sizes"])
     with_proc = sum(1 for k in keys if summary.get(k) and summary[k]["contents"])
+    with_paper = sum(1 for k in keys if summary.get(k) and summary[k]["paper_types"])
     print()
     print(f"出力: {args.out}")
     print(f"      {detail_path}")
-    print(f"該当あり {hit} / {len(keys)} 件（仕上りサイズあり {with_size} 件、加工内容あり {with_proc} 件、該当なし {len(keys) - hit} 件）")
+    print(f"該当あり {hit} / {len(keys)} 件（仕上りサイズあり {with_size} 件、加工内容あり {with_proc} 件、用紙銘柄あり {with_paper} 件、該当なし {len(keys) - hit} 件）")
 
 
 if __name__ == "__main__":
