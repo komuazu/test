@@ -38,9 +38,13 @@ EXPECT = {
 DETAIL_ROWS = 12  # tp-1..7 + wl-1 + ol-1 + ds-1 + pw-1,2
 
 
-def as_sets(t):
+# SQL 版（query_finish_size.sql）に未反映の規則。Python 版が正で、SQL 版は検算用
+KNOWN_SQL_GAPS = {"その他"}  # MIS の仕上加工名「その他」を加工内容に出さない
+
+
+def as_sets(t, drop=()):
     """「 / 」区切りの並び順の違いを無視して比べる。"""
-    return tuple(frozenset(x.split(" / ")) if x else frozenset() for x in t)
+    return tuple(frozenset(x.split(" / ")) - set(drop) if x else frozenset() for x in t)
 
 
 def main():
@@ -139,10 +143,35 @@ def main():
             sgot = {norm_order(r[0])[0]: tuple(r[1:]) for r in srows[1:]}
             for k, exp in EXPECT.items():
                 sk = norm_order(k)[0]
-                if as_sets(sgot.get(sk, ())) != as_sets(exp):
+                if as_sets(sgot.get(sk, ()), KNOWN_SQL_GAPS) != as_sets(exp):
                     ok = False
                     print(f"NG SQL版 {k}: 期待 {exp} / 実際 {sgot.get(sk)}")
-            print("SQL版: Python 版と一致" if ok else "SQL版: 不一致あり")
+            print("SQL版: Python 版と一致（既知の差「その他」を除く）" if ok else "SQL版: 不一致あり")
+
+    # 入力の読み方（見出し判定・小数・枝）
+    sys.path.insert(0, os.path.join(HERE, ".."))
+    from export_finish_size import read_order_numbers, norm_order
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "o.csv")
+        open(p, "w", encoding="utf-8").write("2026年9月 未確認一覧\n08726258\n8726274.5\n0\n")
+        got_keys = list(read_order_numbers(p).keys())
+        assert got_keys == ["8726258"], got_keys
+    assert norm_order("08704276②") == ("8704276", "②")
+    assert norm_order("087033142②") == ("87033142", "②")
+    assert norm_order("８７２６２６２.0") == ("8726262", "")
+    assert norm_order("8726274.5")[0] == ""
+    print("OK: 見出し判定・小数・枝の扱い")
+
+    # events[] に別の受注番号の要素が混ざっていても拾わない
+    from export_finish_size import new_record, absorb_row_json
+    rec = new_record("timeline_processes", "x", "08726259")
+    absorb_row_json(rec, {"finish_size": "B2", "events": [
+        {"order_number": "08726259", "finish_process": "折り"},
+        {"order_number": "08799999", "finish_size": "OTHER", "finish_process": "中綴じ", "outsource_name": "他社"},
+        {"finish_process": "その他"}, "junk", None]})
+    assert rec["sizes"] == ["B2"] and rec["contents"] == ["折り"] and rec["companies"] == [], rec
+    assert rec["flags"] == ["events:08799999"], rec["flags"]
+    print("OK: 別受注番号の events 要素は飛ばす")
 
     print("\nALL OK" if ok else "\nFAILED")
     sys.exit(0 if ok else 1)

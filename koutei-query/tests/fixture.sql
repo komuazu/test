@@ -76,7 +76,8 @@ INSERT INTO timeline_processes (id, date, machine, "startHour", duration, name, 
 -- 8726259: Waiting List にしか無い（未配置）。MIS 取込の仕上加工名は data.events[] の中にだけある
 INSERT INTO waiting_list (id, "orderNumber", name, data) VALUES
 ('wl-1', '08726259', 'ﾎﾟｽﾀｰ', '{"finish_size":"B2 728×515","internal_work":false,"outsourcing":false,"outsource_name":"",
-   "events":[{"order_number":"08726259","finish_size":"B2 728×515","finish_process":"折り","outsource_name":""}],
+   "events":[{"order_number":"08726259","finish_size":"B2 728×515","finish_process":"折り","outsource_name":""},
+             {"order_number":"08726259","finish_size":"B2 728×515","finish_process":"その他","outsource_name":""}],
    "order_paper_info":[{"partName":"本体","paper_type":"オーロラコート","standard_size":"菊全判","paper_weight":"93.5"}]}');
 
 -- 8726260: 外注依頼書テーブルにしか無い

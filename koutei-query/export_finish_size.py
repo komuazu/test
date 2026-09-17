@@ -57,6 +57,8 @@ def norm_order(value):
     rest = m.group(2)
     if re.fullmatch(r"\.0+", rest):  # Excel 由来の 8726258.0
         rest = ""
+    elif re.match(r"^\.\d", rest):  # 8726274.5 のような小数は受注番号ではない
+        return "", s
     if not digits:  # ゼロだけ（0, 000）は受注番号ではない
         return "", s
     return digits, rest
@@ -72,8 +74,9 @@ SQL_NORM = (
 EMPTY_WORDS = {"", "-", "－", "―", "未設定", "未定", "なし", "無し", "none", "null", "nan"}
 # 委託先名として意味のないもの
 NOT_A_COMPANY = EMPTY_WORDS | {"未手配", "内作"}
-# processing_works.classification のうち加工内容としては意味のないもの
-GENERIC_CLASSIFICATION = {"その他", "内作", "外注"}
+# 加工内容としては意味のないもの（MIS の仕上加工名「その他」、processing_works.classification の「その他」など）
+GENERIC_CONTENT = {"その他", "内作", "外注"}
+NOT_A_CONTENT = EMPTY_WORDS | GENERIC_CONTENT
 # work_department のうち内作（自社の加工）と判定するもの（画面の選択肢: -/第二工場/POP課/本社/営業/その他）
 INTERNAL_DEPARTMENTS = {"第二工場", "本社", "POP課"}
 
@@ -137,8 +140,9 @@ def read_order_numbers(path):
             start = 1
             break
     else:
-        if not norm_order(header[0])[0]:
-            start = 1  # 数字で始まらない1行目は見出しとみなす
+        k, rest = norm_order(header[0])
+        if not k or rest:
+            start = 1  # 受注番号として丸ごと読めない1行目（「2026年9月 一覧」など）は見出しとみなす
 
     result = OrderedDict()  # 正規化キー → 元の表記（最初に出たもの）
     dropped = []
@@ -278,7 +282,7 @@ def absorb_event_dict(rec, d):
         rec["part"] = clean(d.get("part_type") or d.get("part_name") or d.get("partName"))
     add_unique(rec["sizes"], d.get("finish_size") or d.get("finished_size") or d.get("finishSize"))
     for k in ("finish_processing_name", "finish_processing", "finishProcessing", "processing_content", "finish_process"):
-        add_unique(rec["contents"], d.get(k))
+        add_unique(rec["contents"], d.get(k), NOT_A_CONTENT)
     rec["internal"] = rec["internal"] or truthy(d.get("internal_work"))
     rec["outsourcing"] = rec["outsourcing"] or truthy(d.get("outsourcing"))
     dept = clean(d.get("work_department"))
@@ -292,9 +296,9 @@ def absorb_event_dict(rec, d):
             if not isinstance(it, dict):
                 continue
             comp = clean(it.get("company") or it.get("company_name") or it.get("name"), NOT_A_COMPANY)
-            cont = clean(it.get("processing_content") or it.get("content"))
+            cont = clean(it.get("processing_content") or it.get("content"), NOT_A_CONTENT)
             add_unique(rec["companies"], comp, NOT_A_COMPANY)
-            add_unique(rec["contents"], cont)
+            add_unique(rec["contents"], cont, NOT_A_CONTENT)
             if (comp or cont) and (comp, cont) not in rec["company_contents"]:
                 rec["company_contents"].append((comp, cont))
     add_paper(rec, d.get("paper_type") or d.get("paperType"), d.get("standard_size"), d.get("paper_weight") or d.get("paperWeight"))
@@ -307,6 +311,22 @@ def absorb_event_dict(rec, d):
     for k in ("isReturnProcess", "isContinueProcess", "is_return", "is_continue"):
         if truthy(d.get(k)) and k not in rec["flags"]:
             rec["flags"].append(k)
+
+
+def absorb_row_json(rec, d):
+    """data 列の JSON 1件ぶん: 最上位と events[] の要素を読む。"""
+    absorb_event_dict(rec, d)
+    events = d.get("events")
+    if isinstance(events, list):
+        for e in events:
+            if not isinstance(e, dict):
+                continue
+            # 要素に別の受注番号が書いてあることがある（配置時のコピーで持ち越されたもの）。それは飛ばす
+            e_key, _ = norm_order(e.get("order_number") or e.get("orderNumber") or "")
+            if e_key and e_key != rec["key"]:
+                rec["flags"].append(f"events:{e.get('order_number') or e.get('orderNumber')}")
+                continue
+            absorb_event_dict(rec, e)
 
 
 def rows_from_event_table(cur, table, keys):
@@ -328,16 +348,10 @@ def rows_from_event_table(cur, table, keys):
     )
     out = []
     for row in cur.fetchall():
-        d = parse_json(row[2])
         rec = new_record(table, row[0], row[1],
                          row[3 + extra.index("updated_at")] if "updated_at" in extra else "",
                          row[3 + extra.index("created_at")] if "created_at" in extra else "")
-        absorb_event_dict(rec, d)
-        events = d.get("events")
-        if isinstance(events, list):
-            for e in events:
-                if isinstance(e, dict):
-                    absorb_event_dict(rec, e)
+        absorb_row_json(rec, parse_json(row[2]))
         out.append(rec)
     print(f"  {table}: {len(out)} 行")
     return out
@@ -367,17 +381,17 @@ def rows_from_flat_table(cur, table, keys, colmap):
         add_unique(rec["sizes"], d.get("finish_size"))
         rec["work_department"] = clean(d.get("work_department"))
         rec["outsourcing"] = truthy(d.get("outsourcing"))
-        add_unique(rec["contents"], d.get("processing_content"))
+        add_unique(rec["contents"], d.get("processing_content"), NOT_A_CONTENT)
         comp = clean(d.get("outsourcing_company"), NOT_A_COMPANY)
         add_unique(rec["companies"], comp, NOT_A_COMPANY)
         add_paper(rec, d.get("paper_type"), d.get("standard_size"), d.get("paper_weight"))
         if table == "processing_works":
             # 内作加工の作業一覧。classification は 折加工1／折加工2／中綴じ加工 などの機械区分
             rec["internal"] = True
-            add_unique(rec["contents"], d.get("classification"), EMPTY_WORDS | GENERIC_CLASSIFICATION)
+            add_unique(rec["contents"], d.get("classification"), NOT_A_CONTENT)
         if table == "outsourcing_list":
             rec["outsourcing"] = True
-        cont = clean(d.get("processing_content"))
+        cont = clean(d.get("processing_content"), NOT_A_CONTENT)
         if comp and (comp, cont) not in rec["company_contents"]:
             rec["company_contents"].append((comp, cont))
         out.append(rec)
@@ -403,7 +417,7 @@ def summarize(records):
             add_unique(s["paper_sizes"], ps)
             add_unique(s["paper_weights"], pw)
         for c in r["contents"]:
-            add_unique(s["contents"], c)
+            add_unique(s["contents"], c, NOT_A_CONTENT)
         for c in r["companies"]:
             add_unique(s["companies"], c, NOT_A_COMPANY)
         add_unique(s["depts"], r["work_department"])
