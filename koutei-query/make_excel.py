@@ -310,6 +310,10 @@ def add_summary(wb, stats, result_path, base_path):
     for i, w in enumerate([22, 8, 11, 16, 11, 10, 10, 11, 8, 8, 11], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = ws.cell(hrow + 1, 2)
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
 
 
 # ------------------------------------------------------------
