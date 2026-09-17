@@ -21,6 +21,7 @@
 import argparse
 import collections
 import datetime as dt
+import io
 import os
 import re
 import sys
@@ -92,33 +93,64 @@ EMPTY_DOC = {"仕上りサイズ": "", "A3以下": "不明", "加工内容": "",
              "加工原文": "", "url": ""}
 
 
+def clean_cell(v):
+    """CSV の 1 マス。前後の空白を落とし、Excel が受け付けない制御文字を外す。"""
+    v = (v or "").strip()
+    return "".join(c for c in v if c == "\t" or c >= " ") if v else ""
+
+
+def judge_cell(a3, size):
+    """CSV の「A3以下」列。○ × 不明 以外が入っていたら仕上りサイズから出し直す。
+
+    仕上りサイズは複数部品を「 / 」でつないだ 1 つの文字列で来るので、
+    必ず分けてから渡す（1 部品でも A3 より大きければ × にするため）。
+    """
+    if a3 in ("○", "×", "不明"):
+        return a3
+    parts = [x.strip() for x in size.split(" / ") if x.strip()]
+    return judge_a3_all(parts) if parts else "不明"
+
+
 def read_koutei_csv(path):
     """export_finish_size.py が出した CSV を読み、帳票と同じ形にして返す。
 
     列: 受注番号, 仕上りサイズ, A3以下, 加工内容, 内外作区分, 委託先名, 用紙銘柄, 用紙規格, 斤量
     中身が全部空の行は入れない（「DB にも無かった」と「埋まった」を混ぜないため）。
+    Excel で開いて保存し直した CP932 の CSV も読む。
     """
     import csv
-    out = {}
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        for rec in csv.DictReader(f):
-            key, _ = norm_order(rec.get("受注番号"))
-            if not key:
-                continue
-            g = lambda k: (rec.get(k) or "").strip()  # noqa: E731
-            vals = [g(k) for k in ("仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量")]
-            if not any(vals):
-                continue
-            size = g("仕上りサイズ")
-            d = dict(EMPTY_DOC)
-            d.update({
-                "key": key, "仕上りサイズ": size,
-                "A3以下": g("A3以下") or (judge_a3_all([size]) if size else "不明"),
-                "加工内容": g("加工内容"), "内外作": g("内外作区分"), "加工所": g("委託先名"),
-                "用紙銘柄": g("用紙銘柄"), "用紙規格": g("用紙規格"), "連量": g("斤量"),
-                "帳票": [SRC_DB], "_src": SRC_DB,
-            })
-            out[key] = d
+    text = None
+    for enc in ("utf-8-sig", "cp932"):
+        try:
+            text = open(path, encoding=enc, newline="").read()
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        sys.exit(f"{path} の文字コードが読めません。UTF-8 か CP932 にしてください")
+    out, dup = {}, []
+    for rec in csv.DictReader(io.StringIO(text)):
+        key, _ = norm_order(rec.get("受注番号"))
+        if not key:
+            continue
+        g = lambda k: clean_cell(rec.get(k))  # noqa: E731
+        vals = [g(k) for k in ("仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量")]
+        if not any(vals):
+            continue
+        size = g("仕上りサイズ")
+        if key in out:
+            dup.append(key)
+        d = dict(EMPTY_DOC)
+        d.update({
+            "key": key, "仕上りサイズ": size, "A3以下": judge_cell(g("A3以下"), size),
+            "加工内容": g("加工内容"), "内外作": g("内外作区分"), "加工所": g("委託先名"),
+            "用紙銘柄": g("用紙銘柄"), "用紙規格": g("用紙規格"), "連量": g("斤量"),
+            "帳票": [SRC_DB], "_src": SRC_DB,
+        })
+        out[key] = d
+    if dup:
+        print(f"※ {os.path.basename(path)} に同じ受注番号が {len(dup)} 件重なっていました"
+              f"（後の行を採用）: {'、'.join(sorted(set(dup))[:5])}")
     return out
 
 
@@ -134,9 +166,10 @@ def prev_key(d):
 def guess_from_reprint(rows):
     """再版（前回受注番号つき）の帳票から、その「前回受注番号」の仕様を推定する。
 
-    あくまで推定。実データ 473 組で確かめたところ、A3 以下の判定は 96.4% 一致だが
-    仕上りサイズそのものは 82%、加工内容は 67% しか一致しない（連番の別部品を
-    前回受注番号に入れている帳票が混ざるため）。使うときは必ず出典を見せること。
+    あくまで推定。元も再版も帳票がある 473 組で確かめたところ、両方に仕上りサイズが
+    ある 469 組では A3 以下の判定が 96.4% 一致するが、仕上りサイズそのものは 82%、
+    加工内容は 67% しか一致しない（連番の別部品を前回受注番号に入れている帳票が
+    混ざるため）。使うときは必ず出典を見せること。
     """
     cand = collections.defaultdict(list)
     for r in rows:
@@ -254,11 +287,11 @@ def write_summary(wb, months, ranges, stats, base_name):
         q = f"'{mth}'"
         def rng(col):
             return f"{q}!{col}{first}:{col}{last}"
-        n_all, n_none = f'COUNTA({rng("C")})', f'COUNTIF({rng(c_a3)},"帳票なし")'
+        n_all, n_have = f'COUNTA({rng("C")})', f'COUNTA({rng(c_src)})'
         n_db, n_guess = f'COUNTIF({rng(c_src)},"{SRC_DB}*")', f'COUNTIF({rng(c_src)},"{SRC_GUESS}*")'
         vals = [mth, f'={n_all}',
-                f'={n_all}-{n_none}', f'={n_none}',
-                f'={n_all}-{n_none}-{n_db}-{n_guess}', f'={n_db}', f'={n_guess}',
+                f'={n_have}', f'={n_all}-{n_have}',
+                f'={n_have}-{n_db}-{n_guess}', f'={n_db}', f'={n_guess}',
                 f'=COUNTA({rng(c_size)})',
                 f'=COUNTIF({rng(c_a3)},"○")', f'=COUNTIF({rng(c_a3)},"×")', f'=COUNTIF({rng(c_a3)},"不明")',
                 f'=COUNTIF({rng(c_kind)},"内作")', f'=COUNTIF({rng(c_kind)},"外注")', f'=COUNTIF({rng(c_kind)},"内作・外注")',
@@ -266,12 +299,14 @@ def write_summary(wb, months, ranges, stats, base_name):
         for i, v in enumerate(vals, 1):
             c = ws.cell(r, i, v)
             c.font, c.border = FONT, BORDER
+    last = r
     r += 1
     ws.cell(r, 1, "合計").font = FONT_BOLD
     ws.cell(r, 1).border = BORDER
     for i in range(2, len(heads) + 1):
         col = L(i)
-        c = ws.cell(r, i, f"=SUM({col}{hrow + 1}:{col}{r - 1})")
+        # 月が 1 つも無いときに =SUM(B5:B4) という自分自身を含む式を作らない
+        c = ws.cell(r, i, f"=SUM({col}{hrow + 1}:{col}{last})" if last > hrow else 0)
         c.font, c.border = FONT_BOLD, BORDER
     r += 2
     ws.cell(r, 1, "凡例").font = FONT_BOLD
@@ -295,8 +330,13 @@ def write_summary(wb, months, ranges, stats, base_name):
              "・製造指示書の得意先名・製品名の切れ目、用紙の銘柄の切れ目は機械的に推定している",
              "・同じ管理番号が複数行ある月は、稼動日報の実績どおり複数行のまま。帳票の列は同じ値が入る",
              "・薄紫の行は「再版推定」。その管理番号を前回受注番号に持つ再版の帳票から写した値で、帳票そのものではない",
-             "　再版 473 組で確かめたところ A3 以下の判定は 96.4% 一致だが、仕上りサイズは 82%、加工内容は 67% しか一致しない",
-             "　（連番の別部品を前回受注番号に入れている帳票が混ざるため）。決める前に元の帳票か基幹システムで確かめる"]
+             "　元も再版も帳票がある 473 組で確かめたところ、両方に仕上りサイズがある 469 組で A3 以下の判定が 96.4% 一致。",
+             "　仕上りサイズそのものは 82%、加工内容は 67% しか一致しない（連番の別部品を前回受注番号に入れている帳票が混ざるため）",
+             "　推定の行のリンクは、推定の元にした別の受注番号の帳票を開く。決める前に元の帳票か基幹システムで確かめる"]
+    if stats.get("a3_only"):
+        notes += ["・この資料は A3 以下（○）の行だけ。A3 より大きい（×）行は外してあるので、合計は母集団の件数より少ない",
+                  "・仕上りサイズが分からない行は「未判定」シートにまとめてある。× かどうかはまだ決まっていない",
+                  "・薄紫の「再版推定」の行もそのまま ○ 側に入っている。A3 判定の一致率は 96.4% なので、決める前に元を確かめる"]
     for i, t in enumerate(notes):
         ws.cell(r + i, 1, t).font = FONT_BOLD if i == 0 else FONT_NOTE
     for i, w in enumerate([10, 8, 8, 8, 9, 8, 11, 13, 10, 10, 11, 8, 8, 11, 12, 12], 1):
@@ -343,7 +383,7 @@ def main():
                 docs[k] = v
                 n_guess += 1
         print(f"再版元からの推定: {n_guess} 件（推定なので「元の帳票」列で見分けられるようにしてある）")
-    stats = {"rows": len(small), "keys": len({x["key"] for x in small}),
+    stats = {"rows": len(small), "keys": len({x["key"] for x in small}), "a3_only": args.a3_only,
              "seizo": sum(d["doc"] == "製造指示書" for d in all_docs), "insatsu": sum(d["doc"] == "印刷指示書" for d in all_docs),
              "itaku": sum(d["doc"] == "外注委託依頼書" for d in all_docs)}
     hit = sum(1 for x in small if x["key"] in docs)
@@ -377,12 +417,14 @@ def main():
     for m in months:
         ranges[m] = write_month(wb, m, by_month[m], docs, note)
         print(f"  {m}: {len(by_month[m])} 行、埋まった {sum(1 for x in by_month[m] if x['key'] in docs)}")
+    sheets = [(m, by_month[m]) for m in months]
     if args.a3_only and pending:
         pending.sort(key=lambda x: (x["月"], x["印刷日"], x["営業部"], x["管理番号"]))
         ranges["未判定"] = write_month(wb, "未判定", pending, docs,
                                      "仕上りサイズが分からない行（帳票なし、または規格外で実寸なし）。A3 以下かどうかは元の帳票か基幹システムで確かめる")
         print(f"  未判定: {len(pending)} 行")
-    write_summary(wb, months + (["未判定"] if args.a3_only and pending else []), ranges, stats, os.path.basename(args.base))
+        sheets.append(("未判定", pending))
+    write_summary(wb, [name for name, _ in sheets], ranges, stats, os.path.basename(args.base))
     wb.save(args.out)
     print(f"出力: {args.out}")
 
@@ -390,11 +432,13 @@ def main():
         import csv
         with open(args.csv, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f, lineterminator="\r\n")
-            w.writerow(["月"] + [h.replace("\n", "") for h, _ in BASE_COLS] + [h.replace("\n", "") for h, _ in DOC_COLS if h != "帳票\nリンク"] + ["リンク"])
-            for m in months:
-                for x in by_month[m]:
+            w.writerow(["シート", "月"] + [h.replace("\n", "") for h, _ in BASE_COLS]
+                       + [h.replace("\n", "") for h, _ in DOC_COLS if h != "帳票\nリンク"] + ["リンク"])
+            for sheet, xs in sheets:        # 未判定シートの行も落とさない
+                for x in xs:
                     d = docs.get(x["key"])
-                    row = [m, x["営業部"], x["管理番号"], x["ｸﾗｲｱﾝﾄ名"], x["品名"], x["営業担当ｺｰﾄﾞ"], x["印刷日"], x["色数"], x["通し数"]]
+                    row = [sheet, x.get("月") or x["印刷日"][:7].replace("/", "-"),
+                           x["営業部"], x["管理番号"], x["ｸﾗｲｱﾝﾄ名"], x["品名"], x["営業担当ｺｰﾄﾞ"], x["印刷日"], x["色数"], x["通し数"]]
                     if d:
                         row += [d["仕上りサイズ"], d["A3以下"], d["加工内容"], d["内外作"], d["加工所"], d["用紙銘柄"], d["用紙規格"], d["連量"],
                                 d["総頁数"], d["受注数量"], remark(d), "・".join(d["帳票"]), d["加工原文"], d["url"]]

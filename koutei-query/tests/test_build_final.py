@@ -174,9 +174,167 @@ def check_end_to_end():
         print("OK: 集計の内訳（帳票／DB／推定）が式で合う")
 
 
+SEIZO = """【製造指示書】
+金額区分 確定区分 {order} ㈱テスト {name} 260410 A01
+受注数量 実内見本数 実外見本数 仕上りサイズ 総頁数
+前回受注番号 {qty} 0 0 {size} 8
+受注日 入稿日 下版日 2026/04/01 2026/04/02 {prev} 4+4 部品 版種
+部品 内・外作 加工所 2026/04/20 2026/04/22
+"""
+
+
+def make_pdftext(d, docs):
+    """ダミーの帳票テキスト（製造指示書）を pdftext フォルダの形で置く。"""
+    os.makedirs(d, exist_ok=True)
+    for i, (order, prev, size, when) in enumerate(docs):
+        fid = f"id{i}"
+        json.dump({"id": fid, "title": f"{order}　ﾃｽﾄ品.pdf", "createdTime": when,
+                   "text": SEIZO.format(order=order, prev=prev, size=size, qty=1000, name="ﾃｽﾄ品")},
+                  open(os.path.join(d, f"{fid}.json"), "w", encoding="utf-8"), ensure_ascii=False)
+
+
+def check_guess_end_to_end():
+    """--guess-reprint を端から端まで。再版 08726300 から元 08726258 を推定する。"""
+    with tempfile.TemporaryDirectory() as td:
+        base = os.path.join(td, "base.xlsx")
+        make_base(base)
+        textdir = os.path.join(td, "pdftext")
+        make_pdftext(textdir, [
+            ("08726300", "08726258", "B5 257×182", "2026-03-01T00:00:00Z"),   # 古い → こちらが採られる
+            ("08726301", "08726258", "A2 594×420", "2026-04-01T00:00:00Z"),
+            ("08726259", "", "A4 297×210", "2026-04-02T00:00:00Z"),           # 母集団にある帳票
+        ])
+        out = os.path.join(td, "g.xlsx")
+        r = subprocess.run([sys.executable, SCRIPT, "--base", base, "--textdir", textdir,
+                            "--guess-reprint", "--out", out], capture_output=True, text=True)
+        print(r.stdout)
+        assert r.returncode == 0, r.stderr
+        wb = load_workbook(out)
+        s4 = wb["2026-04"]
+        c = cols(s4)
+        row = {s4.cell(r_, c["管理番号"]).value: r_ for r_ in range(5, s4.max_row + 1)}
+        g = row["8726258"]
+        assert s4.cell(g, c["元の帳票"]).value == "再版推定 8726300", s4.cell(g, c["元の帳票"]).value
+        assert s4.cell(g, c["仕上りサイズ"]).value == "B5 257×182", "古い方の再版を採っていない"
+        assert s4.cell(g, c["A3以下"]).value == "○"
+        assert s4.cell(g, c["仕上りサイズ"]).fill.fgColor.rgb.endswith("E4DFEC"), "推定の列が薄紫でない"
+        assert s4.cell(g, c["帳票\nリンク"]).hyperlink is not None, "推定元の帳票へのリンクが無い"
+        d = row["8726259"]
+        assert s4.cell(d, c["元の帳票"]).value == "製造指示書", "帳票がある行を推定で上書きしている"
+        assert not s4.cell(d, c["仕上りサイズ"]).fill.fgColor.rgb.endswith("E4DFEC")
+        print("OK: 再版推定を端から端まで（古い方・薄紫・リンク・帳票優先）")
+
+
+def check_a3_only_csv():
+    """--a3-only のとき、未判定シートの行も CSV に出ること（出ていないと黙って消える）。"""
+    with tempfile.TemporaryDirectory() as td:
+        base = os.path.join(td, "base.xlsx")
+        make_base(base)
+        textdir = os.path.join(td, "pdftext")
+        os.makedirs(textdir)
+        res = os.path.join(td, "k.csv")
+        write_csv(res, [
+            ["8726258", "A4 297×210", "○", "", "", "", "", "", ""],
+            ["8726259", "B2 728×515", "×", "", "", "", "", "", ""],      # × は外れる
+            ["8726260", "規格外", "不明", "", "", "", "", "", ""],         # 未判定へ
+        ])
+        out, ocsv = os.path.join(td, "a.xlsx"), os.path.join(td, "a.csv")
+        r = subprocess.run([sys.executable, SCRIPT, "--base", base, "--textdir", textdir,
+                            "--koutei-csv", res, "--a3-only", "--out", out, "--csv", ocsv],
+                           capture_output=True, text=True)
+        print(r.stdout)
+        assert r.returncode == 0, r.stderr
+        wb = load_workbook(out)
+        assert "未判定" in wb.sheetnames, wb.sheetnames
+        n_x = sum(ws.max_row - 4 for ws in wb if ws.title != "集計")
+        rows = list(csv.DictReader(open(ocsv, encoding="utf-8-sig")))
+        assert len(rows) == n_x, f"xlsx {n_x} 行に対し CSV {len(rows)} 行（未判定が落ちている）"
+        assert {r_["シート"] for r_ in rows} == {"2026-04", "未判定"}, sorted({r_["シート"] for r_ in rows})
+        assert all(r_["月"].startswith("2026-0") for r_ in rows), "未判定行の月が消えている"
+        assert [r_["管理番号"] for r_ in rows if r_["シート"] == "2026-04"] == ["8726258"]
+        print("OK: --a3-only でも CSV に未判定シートの行が出る")
+
+
+def check_input_edges():
+    """こわれた入力で落ちない・黙って間違えないこと。"""
+    with tempfile.TemporaryDirectory() as td:
+        # 複数部品の仕上りサイズ。1 部品でも A3 より大きければ ×
+        p = os.path.join(td, "multi.csv")
+        write_csv(p, [["8726258", "A4 297×210 / A2 594×420", "", "", "", "", "", "", ""],
+                      ["8726259", "A4 297×210 / B5 257×182", "", "", "", "", "", "", ""]])
+        got = BF.read_koutei_csv(p)
+        assert got["8726258"]["A3以下"] == "×", "複数部品を 1 つとして判定している"
+        assert got["8726259"]["A3以下"] == "○", got["8726259"]["A3以下"]
+
+        # A3以下 列に変な値 → 仕上りサイズから出し直す
+        p = os.path.join(td, "odd.csv")
+        write_csv(p, [["8726258", "A4 297×210", "はい", "", "", "", "", "", ""],
+                      ["8726259", "", "OK", "中綴じ", "", "", "", "", ""]])
+        got = BF.read_koutei_csv(p)
+        assert got["8726258"]["A3以下"] == "○" and got["8726259"]["A3以下"] == "不明"
+
+        # CP932（Excel で保存し直した CSV）
+        p = os.path.join(td, "cp932.csv")
+        with open(p, "w", encoding="cp932", newline="") as f:
+            w = csv.writer(f, lineterminator="\r\n")
+            w.writerow(HEAD)
+            w.writerow(["8726258", "A4 297×210", "○", "中綴じ", "外注", "㈱松岡製本", "", "", ""])
+        got = BF.read_koutei_csv(p)
+        assert got["8726258"]["加工所"] == "㈱松岡製本", "CP932 の CSV が読めていない"
+
+        # Excel が受け付けない制御文字
+        p = os.path.join(td, "ctrl.csv")
+        write_csv(p, [["8726258", "A4", "○", "折\x0b り", "", "", "", "", ""]])
+        got = BF.read_koutei_csv(p)
+        assert got["8726258"]["加工内容"] == "折 り", repr(got["8726258"]["加工内容"])
+
+        # 同じ受注番号が 2 度（ゼロ埋め違い）→ 後勝ち＋警告
+        p = os.path.join(td, "dup.csv")
+        write_csv(p, [["8726258", "A4", "○", "", "", "", "", "", ""],
+                      ["08726258", "B2 728×515", "×", "", "", "", "", "", ""]])
+        got = BF.read_koutei_csv(p)
+        assert len(got) == 1 and got["8726258"]["仕上りサイズ"] == "B2 728×515"
+
+        # 見出しだけ・空・受注番号列が無い
+        for rows in ([], ):
+            p2 = os.path.join(td, "head.csv")
+            write_csv(p2, rows)
+            assert BF.read_koutei_csv(p2) == {}
+        p2 = os.path.join(td, "nocol.csv")
+        open(p2, "w", encoding="utf-8-sig").write("品名,備考\r\nあ,い\r\n")
+        assert BF.read_koutei_csv(p2) == {}
+        print("OK: 複数部品・変な A3以下・CP932・制御文字・重複・列違いの CSV")
+
+
+def check_empty_population():
+    """母集団が 1 行も無いとき、合計行が自分自身を指す式にならないこと。"""
+    with tempfile.TemporaryDirectory() as td:
+        base = os.path.join(td, "base.xlsx")
+        make_base(base)
+        textdir = os.path.join(td, "pdftext")
+        os.makedirs(textdir)
+        out = os.path.join(td, "e.xlsx")
+        r = subprocess.run([sys.executable, SCRIPT, "--base", base, "--textdir", textdir,
+                            "--max-pass", "0", "--out", out], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        sm = load_workbook(out)["集計"]
+        for row in range(5, sm.max_row + 1):
+            if sm.cell(row, 1).value == "合計":
+                vals = [sm.cell(row, i).value for i in range(2, 8)]
+                assert all(v == 0 for v in vals), f"合計行に式が入っている: {vals}"
+                break
+        else:
+            raise AssertionError("合計行が無い")
+        print("OK: 母集団が空でも循環参照の式を作らない")
+
+
 def main():
     check_unit()
     check_end_to_end()
+    check_guess_end_to_end()
+    check_a3_only_csv()
+    check_input_edges()
+    check_empty_population()
     print("\nALL OK")
 
 
