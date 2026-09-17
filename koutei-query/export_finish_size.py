@@ -247,7 +247,7 @@ def rows_from_event_table(cur, table, keys):
             "flags": [],
             "updated_at": row[3 + extra.index("updated_at")] if "updated_at" in extra else "",
         }
-        for k in ("finish_processing_name", "processing_content", "finish_process"):
+        for k in ("finish_processing_name", "finish_processing", "finishProcessing", "processing_content", "finish_process"):
             add_unique(rec["contents"], d.get(k))
         for k in ("outsourcing_company", "outsource_name"):
             add_unique(rec["companies"], d.get(k))

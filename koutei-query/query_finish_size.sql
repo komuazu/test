@@ -34,6 +34,8 @@ sizes AS (
 ),
 contents AS (
     SELECT k, NULLIF(trim(d->>'finish_processing_name'), '') AS v FROM ev
+    UNION SELECT k, NULLIF(trim(d->>'finish_processing'), '') FROM ev
+    UNION SELECT k, NULLIF(trim(d->>'finishProcessing'), '') FROM ev
     UNION SELECT k, NULLIF(trim(d->>'processing_content'), '') FROM ev
     UNION SELECT k, NULLIF(trim(d->>'finish_process'), '') FROM ev
     UNION SELECT k, NULLIF(trim(content), '') FROM ev_items

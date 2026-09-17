@@ -28,7 +28,7 @@ koutei-kanr30 が持っているのは、MIS の CSV から取り込んだ項目
 | 欲しい項目 | koutei-kanr30 での在りか | 元 |
 |---|---|---|
 | 仕上りサイズ | `timeline_processes.data` / `waiting_list.data` の JSON `finish_size`、`outsourcing_list.finish_size`、`delivery_schedule.finish_size` | MIS CSV の「製品仕上サイズ名」（`calendar_ui.html` の取込）または手入力 |
-| 加工内容 | JSON `finish_processing_name` / `processing_content` / `finish_process`、`outsourcing_items[].processing_content`、`outsourcing_list.processing_content`、`delivery_schedule.processing_content`、`processing_works.processing_content` / `classification` | MIS CSV の「仕上加工名」または手入力 |
+| 加工内容 | JSON `finish_processing_name` / `finish_processing` / `finishProcessing` / `processing_content` / `finish_process`、`outsourcing_items[].processing_content`、`outsourcing_list.processing_content`、`delivery_schedule.processing_content`、`processing_works.processing_content` / `classification` | MIS CSV の「仕上加工名」または手入力 |
 | 内作／外注 | JSON `internal_work` / `outsourcing` / `work_department`（第二工場）、`processing_works` に行があれば内作、`outsourcing_list` に行があれば外注 | 画面のチェック |
 | 委託先名 | JSON `outsourcing_company` / `outsource_name` / `outsourcing_items[].company`、`outsourcing_list.outsourcing_company`、`delivery_schedule.outsourcing_company` | MIS CSV の「外注先名」または手入力 |
 
