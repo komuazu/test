@@ -94,6 +94,9 @@ EMPTY_DOC = {"仕上りサイズ": "", "A3以下": "不明", "加工内容": "",
              "加工原文": "", "url": ""}
 
 
+# 帳票の欄が空のとき DB の値で埋める項目（帳票にある値は上書きしない）
+MERGE_FIELDS = ["仕上りサイズ", "加工内容", "内外作", "加工所", "用紙銘柄", "用紙規格", "連量"]
+
 KOUTEI_COLS = ["受注番号", "仕上りサイズ", "A3以下", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"]
 
 
@@ -398,6 +401,15 @@ def write_summary(wb, months, ranges, stats, base_name):
              "　元も再版も帳票がある 473 組で確かめたところ、両方に仕上りサイズがある 469 組で A3 以下の判定が 96.4% 一致。",
              "　仕上りサイズそのものは 82%、加工内容は 67% しか一致しない（連番の別部品を前回受注番号に入れている帳票が混ざるため）",
              "　推定の行のリンクは、推定の元にした別の受注番号の帳票を開く。決める前に元の帳票か基幹システムで確かめる"]
+    if stats.get("dropped"):
+        notes += [f"・品名に {stats['drop_words']} を含む {stats['dropped']} 行（通し数 {stats['drop_pass']:,}）は外してある。"
+                  "本刷りではないため"]
+    if stats.get("blank_process"):
+        notes += [f"・加工内容が空だった行には「{stats['blank_process']}」を入れてある（加工が無い＝化粧断裁だけ、という扱い）。"
+                  "帳票にも DB にも行が無い空欄の行には入れていない"]
+    if stats.get("filled"):
+        notes += [f"・帳票のある {stats['filled']} 行は、帳票で空だった欄だけ koutei の DB の値で補ってある"
+                  "（「元の帳票」列が 製造指示書・koutei(DB) のように並ぶ。帳票にある値は上書きしていない）"]
     if stats.get("conflicts"):
         notes += [f"・「要確認」シートに {stats['conflicts']} 行。帳票と koutei の DB で A3 以下の判定が割れた行で、"
                   "月シートには帳票の値を載せている",
@@ -428,6 +440,11 @@ def main():
     ap.add_argument("--koutei-csv", help="export_finish_size.py が出した CSV。帳票が無い行をこれで埋める")
     ap.add_argument("--guess-reprint", action="store_true",
                     help="帳票も DB も無い行を、その管理番号を前回受注番号に持つ再版の帳票から推定して埋める（薄紫）")
+    ap.add_argument("--exclude-name", action="append", default=[], metavar="語",
+                    help="品名にこの語を含む行を外す（何度でも指定できる）。例: --exclude-name 本機校正")
+    ap.add_argument("--blank-process", metavar="語",
+                    help="加工内容が空の行にこの語を入れる（加工が無い＝化粧断裁だけ、という意味のとき）。"
+                         "出どころが 1 つも無い行には入れない")
     ap.add_argument("--a3-only", action="store_true",
                     help="月シートは A3 以下（○）の行だけにし、× は外す。帳票なし・不明は「未判定」シートにまとめる")
     args = ap.parse_args()
@@ -435,6 +452,15 @@ def main():
     base = read_base(args.base)
     small = [x for x in base if x["通し数"] is not None and x["通し数"] <= args.max_pass]
     print(f"母集団: 明細 {len(base)} 行 → 通し数 {args.max_pass:,} 以下 {len(small)} 行（管理番号 {len({x['key'] for x in small})} 件）")
+    dropped = []
+    if args.exclude_name:
+        keep = []
+        for x in small:
+            word = next((w for w in args.exclude_name if w in (x["品名"] or "")), None)
+            (dropped if word else keep).append(x)
+        small = keep
+        n_pass = sum(x["通し数"] or 0 for x in dropped)
+        print(f"品名で外した行: {len(dropped)}（{'、'.join(args.exclude_name)}／通し数 {n_pass:,}）→ 残り {len(small)} 行")
 
     all_docs = load_docs(args.textdir)
     merged = merge(all_docs)
@@ -442,13 +468,35 @@ def main():
     n_doc = len(docs)
     n_db = n_guess = 0
     db_rows = {}
-    if args.koutei_csv:          # 帳票が無い管理番号だけ DB の値で埋める（帳票が優先）
+    n_fill = 0
+    if args.koutei_csv:          # 帳票が無い管理番号を DB で埋め、帳票にある管理番号は空欄だけ補う
         db_rows = read_koutei_csv(args.koutei_csv)
         for k, v in db_rows.items():
-            if k not in docs:
+            d = docs.get(k)
+            if d is None:
                 docs[k] = v
                 n_db += 1
-        print(f"koutei の DB: {args.koutei_csv} から {n_db} 件を補った")
+                continue
+            if d.get("_src") != SRC_DOC:
+                continue
+            filled = [f for f in MERGE_FIELDS if not str(d.get(f) or "").strip() and str(v.get(f) or "").strip()]
+            if not filled:
+                continue
+            for f in filled:
+                d[f] = v[f]
+            if "仕上りサイズ" in filled:      # 判定もその値から出し直す
+                d["A3以下"] = v["A3以下"]
+            d["帳票"] = list(d["帳票"]) + [SRC_DB]   # 「元の帳票」に koutei(DB) を足して出どころを残す
+            n_fill += 1
+        print(f"koutei の DB: {args.koutei_csv} から {n_db} 件を補い、帳票のある {n_fill} 件の空欄を埋めた")
+    if args.blank_process:       # 加工が無い＝化粧断裁だけ、という扱い。出どころのある行にだけ入れる
+        n_bp = 0
+        for d in docs.values():
+            if not str(d.get("加工内容") or "").strip():
+                d["加工内容"] = args.blank_process
+                n_bp += 1
+        print(f"加工内容が空の {n_bp} 件に「{args.blank_process}」を入れた（出どころが無い行には入れない）")
+
     if args.guess_reprint:       # それでも無い行を再版の帳票から推定（薄紫・確かな値ではない）
         for k, v in guess_from_reprint(merged).items():
             if k not in docs:
@@ -456,8 +504,12 @@ def main():
                 n_guess += 1
         print(f"再版元からの推定: {n_guess} 件（推定なので「元の帳票」列で見分けられるようにしてある）")
     stats = {"rows": len(small), "keys": len({x["key"] for x in small}), "a3_only": args.a3_only,
+             "dropped": len(dropped), "drop_words": "・".join(args.exclude_name),
+             "drop_pass": sum(x["通し数"] or 0 for x in dropped),
+             "blank_process": args.blank_process, "filled": 0,
              "seizo": sum(d["doc"] == "製造指示書" for d in all_docs), "insatsu": sum(d["doc"] == "印刷指示書" for d in all_docs),
              "itaku": sum(d["doc"] == "外注委託依頼書" for d in all_docs)}
+    stats["filled"] = n_fill
     hit = sum(1 for x in small if x["key"] in docs)
     src_rows = collections.Counter(docs[x["key"]].get("_src") for x in small if x["key"] in docs)
     print(f"帳票: {len(all_docs)} 通・受注 {n_doc} 件 → 母集団の埋まった行 {hit} / {len(small)}"
