@@ -7,6 +7,11 @@
     python build_final.py --base 2026年9月_全社_印刷実績.xlsx --textdir <pdftext フォルダ> \
                           --out 平版印刷_オンデマンド移行検討_3000通し以下_資料.xlsx [--max-pass 3000]
 
+帳票が無い行は、次のどちらかで埋められる（どちらも「元の帳票」列と地の色で見分けられる）。
+
+    --koutei-csv 仕上りサイズ_koutei取得結果.csv   koutei の DB から取った値（確かな値）
+    --guess-reprint                              再版の帳票からの推定（確かな値ではない）
+
 * 母集団の列: 営業部, 管理番号, ｸﾗｲｱﾝﾄ名, 品名, 今年の動向, 無しの場合の代替対策, 対策通し数, 営業担当ｺｰﾄﾞ, 印刷日, 色数, 通し数
   （見出し行が途中に何度も入っているので、管理番号が数字の行だけを明細として読む）
 * 月は印刷日の月。同じ管理番号が複数行ある月はそのまま複数行出す（稼動日報の実績どおり）
@@ -26,7 +31,7 @@ from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from build_from_pdf import load_docs, merge  # noqa: E402
-from export_finish_size import norm_order  # noqa: E402
+from export_finish_size import judge_a3_all, norm_order  # noqa: E402
 
 FONT_NAME = "Meiryo"
 FONT = Font(name=FONT_NAME, size=9)
@@ -41,6 +46,9 @@ FILL_BAND = PatternFill("solid", fgColor="F2F2F2")
 FILL_A3 = {"○": PatternFill("solid", fgColor="C6EFCE"), "×": PatternFill("solid", fgColor="F8CBAD"),
            "不明": PatternFill("solid", fgColor="FFF2CC")}
 FILL_NONE = PatternFill("solid", fgColor="E7E6E6")
+FILL_DB = PatternFill("solid", fgColor="DDEBF7")      # koutei の DB から埋めた列
+FILL_GUESS = PatternFill("solid", fgColor="E4DFEC")   # 再版元からの推定で埋めた列
+SRC_DOC, SRC_DB, SRC_GUESS = "帳票", "koutei(DB)", "再版推定"
 THIN = Side(style="thin", color="BFBFBF")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 ALIGN_WRAP = Alignment(vertical="top", wrap_text=True)
@@ -77,6 +85,72 @@ def read_base(path):
             "営業担当ｺｰﾄﾞ": r[7] or "", "印刷日": str(r[8] or "")[:10], "色数": r[9] or "", "通し数": toi(r[10]),
         })
     return rows
+
+
+EMPTY_DOC = {"仕上りサイズ": "", "A3以下": "不明", "加工内容": "", "内外作": "", "加工所": "",
+             "用紙銘柄": "", "用紙規格": "", "連量": "", "総頁数": None, "受注数量": None,
+             "加工原文": "", "url": ""}
+
+
+def read_koutei_csv(path):
+    """export_finish_size.py が出した CSV を読み、帳票と同じ形にして返す。
+
+    列: 受注番号, 仕上りサイズ, A3以下, 加工内容, 内外作区分, 委託先名, 用紙銘柄, 用紙規格, 斤量
+    中身が全部空の行は入れない（「DB にも無かった」と「埋まった」を混ぜないため）。
+    """
+    import csv
+    out = {}
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        for rec in csv.DictReader(f):
+            key, _ = norm_order(rec.get("受注番号"))
+            if not key:
+                continue
+            g = lambda k: (rec.get(k) or "").strip()  # noqa: E731
+            vals = [g(k) for k in ("仕上りサイズ", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量")]
+            if not any(vals):
+                continue
+            size = g("仕上りサイズ")
+            d = dict(EMPTY_DOC)
+            d.update({
+                "key": key, "仕上りサイズ": size,
+                "A3以下": g("A3以下") or (judge_a3_all([size]) if size else "不明"),
+                "加工内容": g("加工内容"), "内外作": g("内外作区分"), "加工所": g("委託先名"),
+                "用紙銘柄": g("用紙銘柄"), "用紙規格": g("用紙規格"), "連量": g("斤量"),
+                "帳票": [SRC_DB], "_src": SRC_DB,
+            })
+            out[key] = d
+    return out
+
+
+def prev_key(d):
+    """帳票 1 通が指す「前回受注番号」を正規化して返す。"""
+    for one in d.get("docs", [d]):
+        k, _ = norm_order(one.get("前回受注番号"))
+        if k:
+            return k
+    return ""
+
+
+def guess_from_reprint(rows):
+    """再版（前回受注番号つき）の帳票から、その「前回受注番号」の仕様を推定する。
+
+    あくまで推定。実データ 473 組で確かめたところ、A3 以下の判定は 96.4% 一致だが
+    仕上りサイズそのものは 82%、加工内容は 67% しか一致しない（連番の別部品を
+    前回受注番号に入れている帳票が混ざるため）。使うときは必ず出典を見せること。
+    """
+    cand = collections.defaultdict(list)
+    for r in rows:
+        p = prev_key(r)
+        if p and p != r["key"]:
+            cand[p].append(r)
+    out = {}
+    for p, rs in cand.items():
+        src = sorted(rs, key=lambda r: (r.get("createdTime") or "", r["key"]))[0]
+        d = dict(src)
+        d.update({"key": p, "帳票": [f"{SRC_GUESS} {src['key']}"], "_src": SRC_GUESS,
+                  "url": src.get("url", ""), "総頁数": None, "受注数量": None})
+        out[p] = d
+    return out
 
 
 def remark(d):
@@ -118,7 +192,8 @@ def write_month(wb, title, rows, docs, note):
         vals = [n, x["営業部"], x["管理番号"], x["ｸﾗｲｱﾝﾄ名"], x["品名"], x["営業担当ｺｰﾄﾞ"], x["印刷日"], x["色数"], x["通し数"]]
         if d:
             vals += [d["仕上りサイズ"], d["A3以下"], d["加工内容"], d["内外作"], d["加工所"], d["用紙銘柄"], d["用紙規格"], d["連量"],
-                     d["総頁数"], d["受注数量"], remark(d), "・".join(d["帳票"]), "開く", d["加工原文"]]
+                     d["総頁数"], d["受注数量"], remark(d), "・".join(d["帳票"]),
+                     "開く" if d.get("url") else "", d["加工原文"]]
         else:
             vals += ["", "帳票なし"] + [""] * (len(DOC_COLS) - 2)
         band = n % 2 == 0
@@ -127,12 +202,18 @@ def write_month(wb, title, rows, docs, note):
             c.font, c.border, c.alignment = FONT, BORDER, ALIGN_WRAP
             if band:
                 c.fill = FILL_BAND
+        src = d.get("_src", SRC_DOC) if d else ""
+        if src in (SRC_DB, SRC_GUESS):      # 帳票以外から埋めた列は地の色で分ける
+            fill = FILL_DB if src == SRC_DB else FILL_GUESS
+            for i in range(N_BASE + 1, len(COLUMNS) + 1):
+                if i != N_BASE + 2:          # A3以下だけは判定の色を残す
+                    ws.cell(r, i).fill = fill
         a3 = ws.cell(r, N_BASE + 2)
         if a3.value in FILL_A3:
             a3.fill, a3.alignment = FILL_A3[a3.value], ALIGN_CENTER
         elif a3.value == "帳票なし":
             a3.fill, a3.alignment, a3.font = FILL_NONE, ALIGN_CENTER, FONT_NOTE
-        if d:
+        if d and d.get("url"):
             link = ws.cell(r, N_BASE + len(DOC_COLS) - 1)
             link.hyperlink, link.font = d["url"], FONT_LINK
         for i in (9, N_BASE + 9, N_BASE + 10):
@@ -156,7 +237,8 @@ def write_summary(wb, months, ranges, stats, base_name):
     ws["A1"].font = FONT_TITLE
     ws["A2"] = f"作成 {dt.date.today().isoformat()}　母集団: {base_name}　件数は各月シートを COUNTIF で数えている（月シートを直せば追従する）"
     ws["A2"].font = FONT_NOTE
-    heads = ["月", "件数", "帳票あり", "帳票なし", "仕上りサイズあり", "A3以下 ○", "A3以下 ×", "A3以下 不明",
+    heads = ["月", "件数", "値あり", "空欄", "うち帳票", "うち DB", "うち再版推定",
+             "仕上りサイズあり", "A3以下 ○", "A3以下 ×", "A3以下 不明",
              "内作", "外注", "内作・外注", "加工内容あり", "用紙銘柄あり"]
     hrow = 4
     for i, h in enumerate(heads, 1):
@@ -164,6 +246,7 @@ def write_summary(wb, months, ranges, stats, base_name):
     style_header(ws, hrow, len(heads), len(heads))
     L = get_column_letter
     c_size, c_a3, c_cont, c_kind, c_paper = L(N_BASE + 1), L(N_BASE + 2), L(N_BASE + 3), L(N_BASE + 4), L(N_BASE + 6)
+    c_src = L(N_BASE + 12)   # 「元の帳票」列。帳票名／koutei(DB)／再版推定 nnnnnnn のどれかが入る
     r = hrow
     for mth in months:
         r += 1
@@ -171,8 +254,11 @@ def write_summary(wb, months, ranges, stats, base_name):
         q = f"'{mth}'"
         def rng(col):
             return f"{q}!{col}{first}:{col}{last}"
-        vals = [mth, f'=COUNTA({rng("C")})',
-                f'=COUNTA({rng("C")})-COUNTIF({rng(c_a3)},"帳票なし")', f'=COUNTIF({rng(c_a3)},"帳票なし")',
+        n_all, n_none = f'COUNTA({rng("C")})', f'COUNTIF({rng(c_a3)},"帳票なし")'
+        n_db, n_guess = f'COUNTIF({rng(c_src)},"{SRC_DB}*")', f'COUNTIF({rng(c_src)},"{SRC_GUESS}*")'
+        vals = [mth, f'={n_all}',
+                f'={n_all}-{n_none}', f'={n_none}',
+                f'={n_all}-{n_none}-{n_db}-{n_guess}', f'={n_db}', f'={n_guess}',
                 f'=COUNTA({rng(c_size)})',
                 f'=COUNTIF({rng(c_a3)},"○")', f'=COUNTIF({rng(c_a3)},"×")', f'=COUNTIF({rng(c_a3)},"不明")',
                 f'=COUNTIF({rng(c_kind)},"内作")', f'=COUNTIF({rng(c_kind)},"外注")', f'=COUNTIF({rng(c_kind)},"内作・外注")',
@@ -192,7 +278,9 @@ def write_summary(wb, months, ranges, stats, base_name):
     legend = [("○", FILL_A3["○"], "仕上りサイズが A3 以下（オンデマンド機に載る大きさ）"),
               ("×", FILL_A3["×"], "1 部品でも A3 より大きい"),
               ("不明", FILL_A3["不明"], "仕上りサイズが「規格外」だけで実寸が無い"),
-              ("帳票なし", FILL_NONE, "ドライブに製造指示書などの PDF が無く、帳票の列が埋められなかった")]
+              ("帳票なし", FILL_NONE, "ドライブに製造指示書などの PDF が無く、帳票の列が埋められなかった"),
+              ("", FILL_DB, "koutei の DB から埋めた行（「元の帳票」列が koutei(DB)）"),
+              ("", FILL_GUESS, "再版の帳票から推定した行（「元の帳票」列が 再版推定 nnnnnnn）。確かな値ではない")]
     for label, fill, text in legend:
         r += 1
         c = ws.cell(r, 1, label)
@@ -205,10 +293,13 @@ def write_summary(wb, months, ranges, stats, base_name):
              "・加工内容は帳票の加工欄から機械的に拾った言葉。迷うときは「加工欄の原文」列と「帳票リンク」で元を見る",
              "・備考案は 外注（委託先）：加工内容 ／ 内作（加工所）：加工内容 の形。元の Excel の備考欄に貼るときの案",
              "・製造指示書の得意先名・製品名の切れ目、用紙の銘柄の切れ目は機械的に推定している",
-             "・同じ管理番号が複数行ある月は、稼動日報の実績どおり複数行のまま。帳票の列は同じ値が入る"]
+             "・同じ管理番号が複数行ある月は、稼動日報の実績どおり複数行のまま。帳票の列は同じ値が入る",
+             "・薄紫の行は「再版推定」。その管理番号を前回受注番号に持つ再版の帳票から写した値で、帳票そのものではない",
+             "　再版 473 組で確かめたところ A3 以下の判定は 96.4% 一致だが、仕上りサイズは 82%、加工内容は 67% しか一致しない",
+             "　（連番の別部品を前回受注番号に入れている帳票が混ざるため）。決める前に元の帳票か基幹システムで確かめる"]
     for i, t in enumerate(notes):
         ws.cell(r + i, 1, t).font = FONT_BOLD if i == 0 else FONT_NOTE
-    for i, w in enumerate([10, 8, 9, 9, 13, 10, 10, 11, 8, 8, 11, 12, 12], 1):
+    for i, w in enumerate([10, 8, 8, 8, 9, 8, 11, 13, 10, 10, 11, 8, 8, 11, 12, 12], 1):
         ws.column_dimensions[L(i)].width = w
     ws.freeze_panes = ws.cell(hrow + 1, 2)
     ws.page_setup.orientation = "landscape"
@@ -224,6 +315,9 @@ def main():
     ap.add_argument("--out", default="平版印刷_オンデマンド移行検討_3000通し以下_資料.xlsx")
     ap.add_argument("--max-pass", type=int, default=3000)
     ap.add_argument("--csv", help="同じ内容の CSV も出す")
+    ap.add_argument("--koutei-csv", help="export_finish_size.py が出した CSV。帳票が無い行をこれで埋める")
+    ap.add_argument("--guess-reprint", action="store_true",
+                    help="帳票も DB も無い行を、その管理番号を前回受注番号に持つ再版の帳票から推定して埋める（薄紫）")
     ap.add_argument("--a3-only", action="store_true",
                     help="月シートは A3 以下（○）の行だけにし、× は外す。帳票なし・不明は「未判定」シートにまとめる")
     args = ap.parse_args()
@@ -233,12 +327,29 @@ def main():
     print(f"母集団: 明細 {len(base)} 行 → 通し数 {args.max_pass:,} 以下 {len(small)} 行（管理番号 {len({x['key'] for x in small})} 件）")
 
     all_docs = load_docs(args.textdir)
-    docs = {r["key"]: r for r in merge(all_docs)}
+    merged = merge(all_docs)
+    docs = {r["key"]: dict(r, _src=SRC_DOC) for r in merged}
+    n_doc = len(docs)
+    n_db = n_guess = 0
+    if args.koutei_csv:          # 帳票が無い管理番号だけ DB の値で埋める（帳票が優先）
+        for k, v in read_koutei_csv(args.koutei_csv).items():
+            if k not in docs:
+                docs[k] = v
+                n_db += 1
+        print(f"koutei の DB: {args.koutei_csv} から {n_db} 件を補った")
+    if args.guess_reprint:       # それでも無い行を再版の帳票から推定（薄紫・確かな値ではない）
+        for k, v in guess_from_reprint(merged).items():
+            if k not in docs:
+                docs[k] = v
+                n_guess += 1
+        print(f"再版元からの推定: {n_guess} 件（推定なので「元の帳票」列で見分けられるようにしてある）")
     stats = {"rows": len(small), "keys": len({x["key"] for x in small}),
              "seizo": sum(d["doc"] == "製造指示書" for d in all_docs), "insatsu": sum(d["doc"] == "印刷指示書" for d in all_docs),
              "itaku": sum(d["doc"] == "外注委託依頼書" for d in all_docs)}
     hit = sum(1 for x in small if x["key"] in docs)
-    print(f"帳票: {len(all_docs)} 通・受注 {len(docs)} 件 → 母集団と一致 {hit} / {len(small)} 行")
+    src_rows = collections.Counter(docs[x["key"]].get("_src") for x in small if x["key"] in docs)
+    print(f"帳票: {len(all_docs)} 通・受注 {n_doc} 件 → 母集団の埋まった行 {hit} / {len(small)}"
+          f"（{'、'.join(f'{k} {v}' for k, v in sorted(src_rows.items()))}）")
 
     by_month = collections.defaultdict(list)
     pending = []
@@ -265,7 +376,7 @@ def main():
             "A3以下: 緑=○／橙=×／黄=不明／灰=帳票なし。加工内容は機械的に拾った言葉なので、迷うときは右端の原文とリンク先で確かめる")
     for m in months:
         ranges[m] = write_month(wb, m, by_month[m], docs, note)
-        print(f"  {m}: {len(by_month[m])} 行、帳票あり {sum(1 for x in by_month[m] if x['key'] in docs)}")
+        print(f"  {m}: {len(by_month[m])} 行、埋まった {sum(1 for x in by_month[m] if x['key'] in docs)}")
     if args.a3_only and pending:
         pending.sort(key=lambda x: (x["月"], x["印刷日"], x["営業部"], x["管理番号"]))
         ranges["未判定"] = write_month(wb, "未判定", pending, docs,
