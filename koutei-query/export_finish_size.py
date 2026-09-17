@@ -13,7 +13,7 @@ koutei-kanr30（社内工程管理システム）の本番DBから、受注番�
 
     cd <このフォルダ>
     python export_finish_size.py --orders 仕上りサイズ未確認_受注番号一覧.csv ^
-        --env C:\\Users\\116544\\Desktop\\UPDATE17\\web_app\\.env
+        --env C:\\Users\\116544\\Desktop\\UPDATA17\\web_app\\.env
 
 出力:
     仕上りサイズ_koutei取得結果.csv        … 受注番号, 仕上りサイズ, A3以下, 加工内容, 内外作区分, 委託先名, 用紙銘柄, 用紙規格, 斤量

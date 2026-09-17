@@ -78,13 +78,13 @@ PostgreSQL は丸本PC の自分自身にしか口を開けていないので、
 
 ## 2. 丸本PC での動かし方
 
-前提: koutei-kanr30 が動いている PC（`C:\Users\116544\Desktop\UPDATE17` に本体がある）。
+前提: koutei-kanr30 が動いている PC（`C:\Users\116544\Desktop\UPDATA17` に本体がある）。
 Python と `psycopg2` は koutei 本体が使っているものがそのまま使える。
 
 ```bat
 cd /d <このフォルダ>
 python export_finish_size.py --orders 仕上りサイズ未確認_受注番号一覧.csv ^
-    --env C:\Users\116544\Desktop\UPDATE17\web_app\.env
+    --env C:\Users\116544\Desktop\UPDATA17\web_app\.env
 ```
 
 * `--env` には koutei が使っている `.env`（`DATABASE_HOST` などが書いてあるファイル）を渡す。
