@@ -27,6 +27,7 @@ import re
 import sys
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -93,21 +94,28 @@ EMPTY_DOC = {"仕上りサイズ": "", "A3以下": "不明", "加工内容": "",
              "加工原文": "", "url": ""}
 
 
+KOUTEI_COLS = ["受注番号", "仕上りサイズ", "A3以下", "加工内容", "内外作区分", "委託先名", "用紙銘柄", "用紙規格", "斤量"]
+
+
 def clean_cell(v):
-    """CSV の 1 マス。前後の空白を落とし、Excel が受け付けない制御文字を外す。"""
-    v = (v or "").strip()
-    return "".join(c for c in v if c == "\t" or c >= " ") if v else ""
+    """CSV の 1 マス。Excel が受け付けない制御文字を外し、前後の空白を落とす。
+
+    改行・復帰・タブは Excel も openpyxl も受け付けるので残す（加工内容は
+    帳票側が改行で区切っており、DB 由来だけ語がつながると読めなくなる）。
+    """
+    return ILLEGAL_CHARACTERS_RE.sub("", v or "").strip()
 
 
 def judge_cell(a3, size):
     """CSV の「A3以下」列。○ × 不明 以外が入っていたら仕上りサイズから出し直す。
 
-    仕上りサイズは複数部品を「 / 」でつないだ 1 つの文字列で来るので、
+    仕上りサイズは複数部品をスラッシュでつないだ 1 つの文字列で来るので、
     必ず分けてから渡す（1 部品でも A3 より大きければ × にするため）。
+    区切りは対の道具が出す「 / 」に限らず、全角や空白なしでも分ける。
     """
     if a3 in ("○", "×", "不明"):
         return a3
-    parts = [x.strip() for x in size.split(" / ") if x.strip()]
+    parts = [x.strip() for x in re.split(r"\s*[/／]\s*", size) if x.strip()]
     return judge_a3_all(parts) if parts else "不明"
 
 
@@ -122,14 +130,22 @@ def read_koutei_csv(path):
     text = None
     for enc in ("utf-8-sig", "cp932"):
         try:
-            text = open(path, encoding=enc, newline="").read()
+            with open(path, encoding=enc, newline="") as f:
+                text = f.read()
             break
         except UnicodeDecodeError:
             continue
     if text is None:
         sys.exit(f"{path} の文字コードが読めません。UTF-8 か CP932 にしてください")
+    recs = list(csv.DictReader(io.StringIO(text)))
+    head = list(recs[0]) if recs else []
+    if recs and "受注番号" not in head:
+        sys.exit(f"{path} に「受注番号」の列がありません（export_finish_size.py の出力を渡してください）: {head[:6]}")
+    lack = [c for c in KOUTEI_COLS if recs and c not in head]
+    if lack:
+        print(f"※ {os.path.basename(path)} に無い列があります（空のまま進みます）: {'、'.join(lack)}")
     out, dup = {}, []
-    for rec in csv.DictReader(io.StringIO(text)):
+    for rec in recs:
         key, _ = norm_order(rec.get("受注番号"))
         if not key:
             continue
@@ -138,8 +154,9 @@ def read_koutei_csv(path):
         if not any(vals):
             continue
         size = g("仕上りサイズ")
-        if key in out:
+        if key in out:          # 先勝ち（make_excel.py と同じ）
             dup.append(key)
+            continue
         d = dict(EMPTY_DOC)
         d.update({
             "key": key, "仕上りサイズ": size, "A3以下": judge_cell(g("A3以下"), size),
@@ -150,7 +167,7 @@ def read_koutei_csv(path):
         out[key] = d
     if dup:
         print(f"※ {os.path.basename(path)} に同じ受注番号が {len(dup)} 件重なっていました"
-              f"（後の行を採用）: {'、'.join(sorted(set(dup))[:5])}")
+              f"（先の行を採用）: {'、'.join(sorted(set(dup))[:5])}")
     return out
 
 
@@ -268,7 +285,7 @@ def write_summary(wb, months, ranges, stats, base_name):
     ws = wb.create_sheet("集計", 0)
     ws["A1"] = "平版印刷 → オンデマンド移行検討（通し数 3,000 以下）　月別の集計"
     ws["A1"].font = FONT_TITLE
-    ws["A2"] = f"作成 {dt.date.today().isoformat()}　母集団: {base_name}　件数は各月シートを COUNTIF で数えている（月シートを直せば追従する）"
+    ws["A2"] = f"作成 {dt.date.today().isoformat()}　母集団: {base_name}　件数は各月シートを数えた式（月シートを直せば追従する）"
     ws["A2"].font = FONT_NOTE
     heads = ["月", "件数", "値あり", "空欄", "うち帳票", "うち DB", "うち再版推定",
              "仕上りサイズあり", "A3以下 ○", "A3以下 ×", "A3以下 不明",
@@ -437,7 +454,7 @@ def main():
             for sheet, xs in sheets:        # 未判定シートの行も落とさない
                 for x in xs:
                     d = docs.get(x["key"])
-                    row = [sheet, x.get("月") or x["印刷日"][:7].replace("/", "-"),
+                    row = [sheet, x.get("月") or x["印刷日"][:7].replace("/", "-") or "月不明",
                            x["営業部"], x["管理番号"], x["ｸﾗｲｱﾝﾄ名"], x["品名"], x["営業担当ｺｰﾄﾞ"], x["印刷日"], x["色数"], x["通し数"]]
                     if d:
                         row += [d["仕上りサイズ"], d["A3以下"], d["加工内容"], d["内外作"], d["加工所"], d["用紙銘柄"], d["用紙規格"], d["連量"],

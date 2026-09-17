@@ -70,7 +70,7 @@ def check_unit():
         p = os.path.join(td, "r.csv")
         write_csv(p, [
             ["08726258", "A4 297×210", "○", "中綴じ16P", "外注", "㈱松岡製本", "ﾕﾄﾘﾛ上質", "A全判", "70"],
-            ["8726259", "", "", "", "", "", "", "", ""],            # 全部空 → 入れない
+            ["8726259", "", "不明", "", "", "", "", "", ""],        # A3以下 以外が全部空 → 入れない
             ["8726260", "B2 728×515", "", "", "", "", "", "", ""],  # A3以下 が空 → 仕上りサイズから出す
             ["ダメな値", "A4", "○", "", "", "", "", "", ""],          # 受注番号として読めない → 飛ばす
         ])
@@ -117,7 +117,7 @@ def check_end_to_end():
         write_csv(res, [
             ["8726258", "A4 297×210", "○", "中綴じ16P", "外注", "㈱松岡製本", "ﾕﾄﾘﾛ上質", "A全判", "70"],
             ["8726260", "B2 728×515", "×", "折り", "内作", "", "", "", ""],
-            ["8726261", "", "不明", "", "", "", "", "", ""],       # 全部空 → 埋めない
+            ["8726261", "", "不明", "", "", "", "", "", ""],       # A3以下 以外が全部空 → 埋めない
             ["8726263", "A4", "○", "", "", "", "", "", ""],        # 通し数 3,000 超 → 母集団に居ない
         ])
         out = os.path.join(td, "out.xlsx")
@@ -288,21 +288,38 @@ def check_input_edges():
         got = BF.read_koutei_csv(p)
         assert got["8726258"]["加工内容"] == "折 り", repr(got["8726258"]["加工内容"])
 
-        # 同じ受注番号が 2 度（ゼロ埋め違い）→ 後勝ち＋警告
+        # 同じ受注番号が 2 度（ゼロ埋め違い）→ 先勝ち（make_excel.py と同じ）＋警告
         p = os.path.join(td, "dup.csv")
         write_csv(p, [["8726258", "A4", "○", "", "", "", "", "", ""],
                       ["08726258", "B2 728×515", "×", "", "", "", "", "", ""]])
         got = BF.read_koutei_csv(p)
-        assert len(got) == 1 and got["8726258"]["仕上りサイズ"] == "B2 728×515"
+        assert len(got) == 1 and got["8726258"]["仕上りサイズ"] == "A4", got["8726258"]["仕上りサイズ"]
+
+        # 区切りは全角スラッシュでも空白なしでも分ける
+        assert BF.judge_cell("", "A4 297×210/A2 594×420") == "×"
+        assert BF.judge_cell("", "A4 297×210 ／ A2 594×420") == "×"
+        assert BF.judge_cell("○", "A4 297×210 / A2 594×420") == "○", "DB の判定を勝手に書き換えている"
+
+        # 改行・タブは Excel が受け付けるので残す。落とすのは違法な制御文字だけ
+        assert BF.clean_cell("折り\nミシン") == "折り\nミシン", "改行まで落としている"
+        assert BF.clean_cell("折\x0b り") == "折 り"
+        assert BF.clean_cell("\x00 あたま \x00") == "あたま", "制御文字を外したあとの空白が残る"
+        for ch in "㈱（株）ﾕﾄﾘﾛ上質Ａ全判①〜－≒":
+            assert BF.clean_cell(ch) == ch, f"{ch!r} を壊している"
 
         # 見出しだけ・空・受注番号列が無い
         for rows in ([], ):
             p2 = os.path.join(td, "head.csv")
             write_csv(p2, rows)
             assert BF.read_koutei_csv(p2) == {}
+        # 「受注番号」列が無い CSV は黙って 0 件にせず、理由を出して止まる
         p2 = os.path.join(td, "nocol.csv")
-        open(p2, "w", encoding="utf-8-sig").write("品名,備考\r\nあ,い\r\n")
-        assert BF.read_koutei_csv(p2) == {}
+        open(p2, "w", encoding="utf-8-sig").write("order_no,size\r\nあ,い\r\n")
+        r = subprocess.run([sys.executable, "-c",
+                            f"import sys; sys.path.insert(0, {ROOT!r});"
+                            f"import build_final as B; B.read_koutei_csv({p2!r})"],
+                           capture_output=True, text=True)
+        assert r.returncode != 0 and "受注番号" in (r.stdout + r.stderr), (r.returncode, r.stdout, r.stderr)
         print("OK: 複数部品・変な A3以下・CP932・制御文字・重複・列違いの CSV")
 
 
