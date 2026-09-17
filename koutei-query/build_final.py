@@ -286,15 +286,16 @@ def write_month(wb, title, rows, docs, note):
 
 CONFLICT_COLS = [("No", 5), ("月", 9), ("営業部", 13), ("管理番号", 10), ("ｸﾗｲｱﾝﾄ名", 20), ("品名", 26), ("通し数", 8),
                  ("帳票の仕上りサイズ", 20), ("帳票\n判定", 7), ("DB の仕上りサイズ", 26), ("DB\n判定", 7),
-                 ("帳票\nリンク", 7)]
+                 ("採用", 7), ("帳票\nリンク", 7)]
 
 
-def write_conflicts(wb, rows):
-    """帳票と DB で A3 以下の判定が割れた行を並べる。どちらが正しいとは決めない。"""
+def write_conflicts(wb, rows, taken):
+    """帳票と DB で A3 以下の判定が割れた行を、両方の値を並べて出す。"""
     ws = wb.create_sheet("要確認")
     ws["A1"] = "帳票と koutei の DB で「A3 以下」の判定が割れた行"
     ws["A1"].font = FONT_TITLE
-    ws["A2"] = ("月シートには帳票の値を載せている。どちらにも取りこぼしがあるので、この行は元を見て決める。"
+    ws["A2"] = (f"月シートには {taken} の値を載せている。もう一方の値もこの表に残してあるので、"
+                "気になる行は帳票リンクで元を確かめる。"
                 "帳票側は用紙の大きさを仕上りサイズ欄に拾ってしまうことがあり、DB 側は部品を多く並べる"
                 "（付属のポスターなど別部品や、MIS 一括取込の既定値「B1」が混ざる）。")
     ws["A2"].font = FONT_NOTE
@@ -304,10 +305,10 @@ def write_conflicts(wb, rows):
         ws.column_dimensions[get_column_letter(i)].width = w
     style_header(ws, hrow, 7, len(CONFLICT_COLS))
     r = hrow
-    for n, (x, d, b) in enumerate(rows, 1):
+    for n, (x, d, b, url) in enumerate(rows, 1):
         r += 1
         vals = [n, x.get("月", ""), x["営業部"], x["管理番号"], x["ｸﾗｲｱﾝﾄ名"], x["品名"], x["通し数"],
-                d["仕上りサイズ"], d["A3以下"], b["仕上りサイズ"], b["A3以下"], "開く" if d.get("url") else ""]
+                d["仕上りサイズ"], d["A3以下"], b["仕上りサイズ"], b["A3以下"], taken, "開く" if url else ""]
         for i, v in enumerate(vals, 1):
             c = ws.cell(r, i, v)
             c.font, c.border, c.alignment = FONT, BORDER, ALIGN_WRAP
@@ -319,9 +320,11 @@ def write_conflicts(wb, rows):
                 c.fill, c.alignment = FILL_A3[c.value], ALIGN_CENTER
         ws.cell(r, 7).number_format = "#,##0"
         ws.cell(r, 7).alignment = ALIGN_RIGHT
-        if d.get("url"):
+        ws.cell(r, 12).alignment = ALIGN_CENTER
+        ws.cell(r, 12).font = FONT_BOLD
+        if url:
             link = ws.cell(r, len(CONFLICT_COLS))
-            link.hyperlink, link.font = d["url"], FONT_LINK
+            link.hyperlink, link.font = url, FONT_LINK
     ws.freeze_panes = ws.cell(hrow + 1, 5)
     ws.auto_filter.ref = f"A{hrow}:{get_column_letter(len(CONFLICT_COLS))}{max(r, hrow + 1)}"
     ws.print_title_rows = f"{hrow}:{hrow}"
@@ -412,7 +415,7 @@ def write_summary(wb, months, ranges, stats, base_name):
                   "（「元の帳票」列が 製造指示書・koutei(DB) のように並ぶ。帳票にある値は上書きしていない）"]
     if stats.get("conflicts"):
         notes += [f"・「要確認」シートに {stats['conflicts']} 行。帳票と koutei の DB で A3 以下の判定が割れた行で、"
-                  "月シートには帳票の値を載せている",
+                  f"月シートには {stats.get('taken', '帳票')} の値を載せている",
                   "　帳票側は用紙の大きさを仕上りサイズ欄に拾うことがあり、DB 側は別部品や MIS 一括取込の既定値「B1」を"
                   "並べることがある。どちらも取りこぼすので元を見て決める"]
     if stats.get("a3_only"):
@@ -440,6 +443,9 @@ def main():
     ap.add_argument("--koutei-csv", help="export_finish_size.py が出した CSV。帳票が無い行をこれで埋める")
     ap.add_argument("--guess-reprint", action="store_true",
                     help="帳票も DB も無い行を、その管理番号を前回受注番号に持つ再版の帳票から推定して埋める（薄紫）")
+    ap.add_argument("--conflict-size", choices=["帳票", "DB"], default="帳票",
+                    help="帳票と DB で A3 の判定が割れたとき、どちらの仕上りサイズを載せるか（既定: 帳票）。"
+                         "どちらを選んでも「要確認」シートに両方の値を並べる")
     ap.add_argument("--exclude-name", action="append", default=[], metavar="語",
                     help="品名にこの語を含む行を外す（何度でも指定できる）。例: --exclude-name 本機校正")
     ap.add_argument("--blank-process", metavar="語",
@@ -468,6 +474,7 @@ def main():
     n_doc = len(docs)
     n_db = n_guess = 0
     db_rows = {}
+    conflicts_all = {}
     n_fill = 0
     if args.koutei_csv:          # 帳票が無い管理番号を DB で埋め、帳票にある管理番号は空欄だけ補う
         db_rows = read_koutei_csv(args.koutei_csv)
@@ -489,6 +496,22 @@ def main():
             d["帳票"] = list(d["帳票"]) + [SRC_DB]   # 「元の帳票」に koutei(DB) を足して出どころを残す
             n_fill += 1
         print(f"koutei の DB: {args.koutei_csv} から {n_db} 件を補い、帳票のある {n_fill} 件の空欄を埋めた")
+
+        # 帳票と DB で A3 の判定が割れた行。どちらを載せるかは --conflict-size で決める
+        for k, v in db_rows.items():
+            d = docs.get(k)
+            if d is None or d.get("_src") != SRC_DOC:
+                continue
+            if "不明" in (d["A3以下"], v["A3以下"]) or d["A3以下"] == v["A3以下"]:
+                continue
+            was = {"仕上りサイズ": d["仕上りサイズ"], "A3以下": d["A3以下"]}
+            if args.conflict_size == "DB":
+                d["仕上りサイズ"], d["A3以下"] = v["仕上りサイズ"], v["A3以下"]
+                if SRC_DB not in d["帳票"]:
+                    d["帳票"] = list(d["帳票"]) + [SRC_DB]
+            conflicts_all[k] = (was, {"仕上りサイズ": v["仕上りサイズ"], "A3以下": v["A3以下"]})
+        if conflicts_all:
+            print(f"帳票と DB で A3 の判定が割れた受注番号: {len(conflicts_all)} 件（採用: {args.conflict_size}）")
     if args.blank_process:       # 加工が無い＝化粧断裁だけ、という扱い。出どころのある行にだけ入れる
         n_bp = 0
         for d in docs.values():
@@ -548,23 +571,23 @@ def main():
                                      "仕上りサイズが分からない行（帳票なし、または規格外で実寸なし）。A3 以下かどうかは元の帳票か基幹システムで確かめる")
         print(f"  未判定: {len(pending)} 行")
         sheets.append(("未判定", pending))
-    # 帳票と DB が両方あって A3 の判定が割れた行を控える（月シートは帳票の値のまま）
+    # 判定が割れた受注番号のうち、この資料に出てくるものを「要確認」シートに並べる
     conflicts, seen = [], set()
     for name, xs in sheets:
         for x in xs:
             k = x["key"]
-            d, b = docs.get(k), db_rows.get(k)
-            if not (d and b) or d.get("_src") != SRC_DOC or k in seen:
-                continue
-            if "不明" in (d["A3以下"], b["A3以下"]) or d["A3以下"] == b["A3以下"]:
+            if k not in conflicts_all or k in seen:
                 continue
             seen.add(k)
-            conflicts.append((dict(x, 月=x.get("月") or x["印刷日"][:7].replace("/", "-")), d, b))
+            was, now = conflicts_all[k]
+            conflicts.append((dict(x, 月=x.get("月") or x["印刷日"][:7].replace("/", "-")),
+                              was, now, (docs.get(k) or {}).get("url", "")))
     if conflicts:
         conflicts.sort(key=lambda t: (t[0]["月"], t[0]["管理番号"]))
-        n_conf = write_conflicts(wb, conflicts)
+        n_conf = write_conflicts(wb, conflicts, args.conflict_size)
         stats["conflicts"] = n_conf
-        print(f"  要確認: {n_conf} 行（帳票と DB で A3 の判定が割れた）")
+        stats["taken"] = args.conflict_size
+        print(f"  要確認: {n_conf} 行（帳票と DB で A3 の判定が割れた。採用: {args.conflict_size}）")
     write_summary(wb, [name for name, _ in sheets], ranges, stats, os.path.basename(args.base))
     wb.save(args.out)
     print(f"出力: {args.out}")
